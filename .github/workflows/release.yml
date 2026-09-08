@@ -1,0 +1,33 @@
+# 태그(예: 0.1.0)를 푸시하면 테스트·빌드 후 GitHub Release를 만들고
+# BRAT가 읽는 세 파일(main.js, manifest.json, styles.css)을 첨부한다.
+# 태그 이름은 manifest.json의 version과 같아야 한다(BRAT 규칙).
+name: Release
+
+on:
+  push:
+    tags: ["*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: 태그와 manifest version이 같은지 확인
+        run: |
+          v=$(node -p "require('./manifest.json').version")
+          if [ "$v" != "$GITHUB_REF_NAME" ]; then
+            echo "manifest.json version($v) != tag($GITHUB_REF_NAME)"; exit 1
+          fi
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Release 생성 + 자산 첨부
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css --title "tlog $GITHUB_REF_NAME" --notes "운동 일지 플러그인 $GITHUB_REF_NAME"
