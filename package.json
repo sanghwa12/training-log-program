@@ -1,0 +1,19 @@
+{
+  "name": "tlog",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "운동 일지 — Obsidian 플러그인 (점진적 과부하, 변동 일정)",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/logic.test.ts",
+    "check": "node scripts/check.ts"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "obsidian": "^1.13.1",
+    "typescript": "^7.0.2"
+  }
+}

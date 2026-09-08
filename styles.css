@@ -1,0 +1,64 @@
+/* 운동 일지 — 모든 규칙은 .tlog-view 아래로만. */
+.tlog-view { padding: 8px 12px 24px; overflow-y: auto; }
+.tlog-view button {
+  min-height: 44px; font-size: 17px; border-radius: 10px;
+  touch-action: manipulation; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.tlog-view button:disabled { opacity: 0.4; }
+
+/* 띠·안내 */
+.tlog-banner { padding: 10px 12px; border-radius: 8px; margin: 6px 0; font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tlog-banner.is-error { background: var(--background-modifier-error); color: var(--text-on-accent); }
+.tlog-banner.is-warn { background: var(--background-modifier-border); }
+.tlog-note { font-size: 13px; color: var(--text-muted); margin: 6px 0; }
+.tlog-date { font-size: 14px; color: var(--text-muted); margin: 6px 0 2px; }
+.tlog-title { font-size: 18px; font-weight: 600; margin: 8px 0; }
+.tlog-sub { font-size: 14px; color: var(--text-muted); margin: 2px 0; }
+.tlog-hint { font-size: 14px; color: var(--text-accent); margin: 2px 0; }
+.tlog-footer { font-size: 12px; color: var(--text-faint); text-align: center; margin-top: 18px; }
+
+/* 홈 */
+.tlog-list { margin: 8px 0 16px; }
+.tlog-item { padding: 8px 0; border-bottom: 1px solid var(--background-modifier-border); }
+.tlog-item-main { font-size: 17px; }
+.tlog-links { display: flex; justify-content: center; gap: 18px; }
+
+/* 기록 화면 */
+.tlog-head { display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; }
+.tlog-exname { font-size: 26px; font-weight: 700; }
+.tlog-last { font-size: 17px; margin: 6px 0 2px; }
+
+.tlog-stepper { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.tlog-stepper-label { width: 40px; font-size: 15px; color: var(--text-muted); }
+.tlog-step { width: 60px; min-height: 52px; font-size: 26px; touch-action: none; }
+.tlog-view button.tlog-value { flex: 1; min-height: 52px; font-size: 26px; font-weight: 700;
+  background: transparent; border: 1px dashed var(--background-modifier-border); box-shadow: none; }
+.tlog-view input.tlog-valinput { flex: 1; min-height: 52px; font-size: 24px; font-weight: 700; text-align: center; border-radius: 10px; }
+
+.tlog-main { width: 100%; min-height: 60px; font-size: 20px; font-weight: 700; margin: 12px 0 6px;
+  background: var(--interactive-accent); color: var(--text-on-accent); }
+.tlog-today { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 16px; margin: 4px 0 2px; }
+.tlog-today-label { margin-right: 4px; }
+.tlog-view button.tlog-setbtn { min-height: 38px; font-size: 16px; padding: 0 10px; }
+.tlog-view button.tlog-setbtn.is-selected { outline: 3px solid var(--text-accent); }
+.tlog-item.is-link { cursor: pointer; }
+
+.tlog-row { display: flex; gap: 8px; margin: 8px 0; }
+.tlog-row > button { flex: 1; }
+.tlog-row > button.tlog-next { flex: 2; font-weight: 600; }
+
+/* 글자처럼 보이는 보조 버튼 */
+.tlog-view button.tlog-link { background: transparent; border: none; box-shadow: none; color: var(--text-muted);
+  text-decoration: underline; min-height: 40px; font-size: 15px; padding: 0 6px; }
+
+/* 더보기 */
+.tlog-menu { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--background-modifier-border); border-radius: 10px; padding: 10px; margin: 6px 0; }
+.tlog-view button.tlog-danger { color: var(--text-error); background: transparent; border: 1px solid var(--background-modifier-error); box-shadow: none; }
+.tlog-add { display: flex; flex-direction: column; gap: 6px; }
+.tlog-pick { text-align: left; font-size: 15px; }
+.tlog-newex { display: flex; gap: 8px; }
+.tlog-view input.tlog-nameinput { flex: 1; min-width: 0; font-size: 17px; min-height: 44px; padding: 0 10px; border-radius: 8px; }
+.tlog-hist { font-size: 14px; }
+.tlog-hist-title { font-weight: 600; margin: 6px 0 2px; color: var(--text-muted); }
+.tlog-hist-row { font-variant-numeric: tabular-nums; white-space: pre-wrap; padding: 2px 0; }
