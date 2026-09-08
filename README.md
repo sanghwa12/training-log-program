@@ -126,6 +126,8 @@ PC Obsidian에서 `C:\Users\USER\dev\training-log-program\tlog-vault`를 볼트�
 ## 배포 (BRAT용 Release)
 
 1. `manifest.json`의 `version`을 올리고 커밋·푸시.
-2. `git tag <version>` (예: `0.1.1`, `v` 없이) → `git push --tags`.
-3. GitHub에서 그 태그로 Release 생성(draft 아님), `npm run build`로 만든 `main.js`와 `manifest.json`, `styles.css` 세 파일을 자산으로 첨부.
+2. `git tag <version>` (예: `0.1.1`, `v` 없이) → `git push origin <version>`.
+3. GitHub Actions(`.github/workflows/release.yml`)가 테스트·빌드 후 Release를 만들고 `main.js`, `manifest.json`, `styles.css`를 자동으로 첨부한다. 태그와 manifest version이 다르면 실패한다.
 4. 폰 BRAT에서 Check for updates.
+
+수동으로 할 때는 `npm run build`로 만든 세 파일을 GitHub 웹의 Release에 직접 첨부한다.
