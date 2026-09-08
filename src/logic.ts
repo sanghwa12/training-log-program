@@ -4,19 +4,19 @@
 // 설계: 무게·횟수는 사용자가 정한다. 앱은 계산하지 않고, 날짜별 기록을 쌓아 추세(주간·월간 최고)와
 // 사실만 알려 주는 힌트("60 kg로 3세션 연속")를 보여 준다.
 
-export const FORMAT = "tlog v3";
+export const FORMAT = "tlog v4";
 export const LOG_PATH = "tlog.md";
 export const GAP_DAYS = 14;     // 이 일수 이상 쉬었으면 알려 준다(정보)
 export const SAME_STREAK = 3;   // 같은 최고 무게가 이만큼 이어지면 알려 준다(정보)
-export const HIDDEN = "-";      // 숨긴 종목의 템플릿 값. 기록은 그대로 두고 어떤 세션 목록에도 넣지 않는다.
 
-export type Exercise = { id: string; name: string; template: string };
+/** 종목. 템플릿(A/B) 구분은 없다 — 오늘 할 종목은 사용자가 그때그때 고른다. hidden이면 목록에서만 뺀다(기록은 유지). */
+export type Exercise = { id: string; name: string; hidden: boolean };
 export type SetRec = { kg: number; reps: number };
 export type Entry = { id: string; sets: SetRec[] };
-export type Session = { date: string; time: string | null; template: string; entries: Entry[] };
+/** 하루 = 세션 하나. time은 첫 세트를 찍은 시각. */
+export type Session = { date: string; time: string | null; entries: Entry[] };
 export type Doc = { writtenAt: string; exercises: Exercise[]; sessions: Session[] };
 export type HistItem = { date: string; sets: SetRec[] };
-export type Plan = { template: string; exercises: Exercise[]; current: number };
 export type Period = { key: string; label: string; topKg: number; best: SetRec; sessions: number };
 
 export class ParseError extends Error {
@@ -165,48 +165,21 @@ export function hints(hist: HistItem[], lastSessionDate: string | null, today: s
   return out;
 }
 
-// ---------- 세션 순서 ----------
+// ---------- 오늘 ----------
 
-/** 종목 표에 등장하는 템플릿(숨김 제외), 등장 순서대로 중복 없이. */
-export function templatesOf(exercises: Exercise[]): string[] {
-  const out: string[] = [];
-  for (const e of exercises) if (e.template !== HIDDEN && !out.includes(e.template)) out.push(e.template);
-  return out;
+/** 오늘 블록(세션). 없으면 null. */
+export function todayBlock(doc: Doc, today: string): Session | null {
+  return doc.sessions.find(s => s.date === today) ?? null;
 }
 
-/** 다음 세션 = 직전 세션 템플릿의 다음 것(순환). 기록이 없으면 첫 템플릿. template을 주면 강제. */
-export function nextSession(exercises: Exercise[], sessions: Session[], template: string | null = null): { template: string; exercises: Exercise[] } {
-  const ts = templatesOf(exercises);
-  if (ts.length === 0) return { template: template ?? "A", exercises: [] };
-  let t = template;
-  if (!t) {
-    const last = sessions.length ? sessions[sessions.length - 1].template : null;
-    const i = last ? ts.indexOf(last) : -1;
-    t = ts[(i + 1) % ts.length];
-  }
-  const chosen = t;
-  return { template: chosen, exercises: exercises.filter(e => e.template === chosen) };
+/** 숨기지 않은 종목, 파일 순서 그대로. 홈 목록이자 "다음 ›" 순서. */
+export function visibleExercises(doc: Doc): Exercise[] {
+  return doc.exercises.filter(e => !e.hidden);
 }
 
-/**
- * 오늘 블록이 있으면 진행 계획. 목록 = 블록의 종목 순서 + 그 템플릿에서 아직 안 한 종목.
- * 현재 종목 = 가장 최근에 세트를 찍기 시작한 종목(블록의 마지막 entry). 세트 수 계획은 없다 — 다음으로 넘어갈지는 사용자가 정한다.
- */
-export function todayPlan(doc: Doc, today: string): Plan | null {
-  const s = doc.sessions.find(x => x.date === today);
-  if (!s) return null;
-  const byId = new Map(doc.exercises.map(e => [e.id, e] as const));
-  const list: Exercise[] = [];
-  for (const en of s.entries) {
-    const ex = byId.get(en.id);
-    if (ex && !list.includes(ex)) list.push(ex);
-  }
-  for (const ex of doc.exercises) {
-    if (ex.template === s.template && !list.includes(ex)) list.push(ex);
-  }
-  const lastId = s.entries.length ? s.entries[s.entries.length - 1].id : null;
-  const lastIdx = lastId ? list.findIndex(ex => ex.id === lastId) : -1;
-  return { template: s.template, exercises: list, current: Math.max(0, lastIdx) };
+/** 오늘 가장 최근에 세트를 찍기 시작한 종목 id. 앱을 다시 열 때 그 종목으로 돌아간다. */
+export function lastEntryId(block: Session | null): string | null {
+  return block && block.entries.length ? block.entries[block.entries.length - 1].id : null;
 }
 
 // ---------- 종목 관리 ----------
@@ -217,13 +190,13 @@ export function slugId(name: string): string {
 }
 
 /** 사용자가 입력한 이름으로 새 종목을 만든다(문서에 넣는 것은 호출자). id가 겹치면 _2, _3… */
-export function newExercise(doc: Doc, name: string, template: string): Exercise {
+export function newExercise(doc: Doc, name: string): Exercise {
   const clean = name.trim();
   const base = slugId(clean) || "ex";
   let id = base === "session" ? "ex_session" : base;
   const ids = new Set(doc.exercises.map(e => e.id));
   for (let n = 2; ids.has(id); n++) id = `${base}_${n}`;
-  return { id, name: clean, template };
+  return { id, name: clean, hidden: false };
 }
 
 /** 어느 세션에든 이 종목의 세트가 있는가. */
@@ -231,23 +204,23 @@ export function hasRecords(doc: Doc, id: string): boolean {
   return doc.sessions.some(s => s.entries.some(e => e.id === id && e.sets.length > 0));
 }
 
-/** 종목 삭제. 기록이 없으면 줄을 지우고 "deleted", 있으면 숨기고(template = "-") "hidden". */
+/** 종목 삭제. 기록이 없으면 줄을 지우고 "deleted", 있으면 숨기고 "hidden"(기록 줄이 파서에서 거부되지 않도록). */
 export function removeExercise(doc: Doc, id: string): "deleted" | "hidden" | "missing" {
   const i = doc.exercises.findIndex(e => e.id === id);
   if (i < 0) return "missing";
   if (hasRecords(doc, id)) {
-    doc.exercises[i].template = HIDDEN;
+    doc.exercises[i].hidden = true;
     return "hidden";
   }
   doc.exercises.splice(i, 1);
   return "deleted";
 }
 
-/** 숨긴 종목을 템플릿에 되돌린다. */
-export function restoreExercise(doc: Doc, id: string, template: string): boolean {
+/** 숨긴 종목을 목록에 되돌린다. */
+export function restoreExercise(doc: Doc, id: string): boolean {
   const ex = doc.exercises.find(e => e.id === id);
   if (!ex) return false;
-  ex.template = template;
+  ex.hidden = false;
   return true;
 }
 
@@ -257,16 +230,16 @@ const fmtKg = (x: number): string => String(round2(x));
 
 /**
  * 전체 문서 → tlog.md 텍스트.
- *   %% tlog v3 <시각> %%
- *   %% ex <id> <템플릿> <이름> %%
- *   YYYY-MM-DD session <템플릿> [HH:MM]
+ *   %% tlog v4 <시각> %%
+ *   %% ex <id> <이름> %%          (숨긴 종목은 ex 대신 hidden)
+ *   YYYY-MM-DD session [HH:MM]
  *   YYYY-MM-DD <id> <kg>x<reps> ...
  */
 export function toLogText(doc: Doc): string {
   const lines: string[] = [`%% ${FORMAT} ${doc.writtenAt} %%`];
-  for (const e of doc.exercises) lines.push(`%% ex ${e.id} ${e.template} ${e.name} %%`);
+  for (const e of doc.exercises) lines.push(`%% ${e.hidden ? "hidden" : "ex"} ${e.id} ${e.name} %%`);
   for (const s of doc.sessions) {
-    lines.push(`${s.date} session ${s.template}${s.time ? " " + s.time : ""}`);
+    lines.push(`${s.date} session${s.time ? " " + s.time : ""}`);
     for (const en of s.entries) {
       if (!en.sets.length) continue;
       lines.push(`${s.date} ${en.id} ${en.sets.map(x => `${fmtKg(x.kg)}x${x.reps}`).join(" ")}`);
@@ -280,14 +253,16 @@ const TIME_RE = /^\d{2}:\d{2}$/;
 const SET_RE = /^(\d+(?:\.\d+)?)x(\d+)$/;
 const ID_RE = /^[^\s%]+$/; // 공백과 %만 아니면 된다(한글 가능). "session"은 예약어.
 
-/** tlog.md 텍스트 → 문서. v1·v2 파일도 읽는다(저장은 항상 v3). 어떤 오류든 줄 번호와 함께 ParseError를 던진다. */
+/** tlog.md 텍스트 → 문서. v1~v3 파일도 읽는다(저장은 항상 v4). 어떤 오류든 줄 번호와 함께 ParseError를 던진다. */
 export function parseLogText(text: string): Doc {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   const lines = text.split("\n").map(l => l.replace(/\r$/, ""));
-  const head = /^%% tlog v([123]) (\S+) %%$/.exec((lines[0] ?? "").trim());
+  const head = /^%% tlog v([1234]) (\S+) %%$/.exec((lines[0] ?? "").trim());
   if (!head) throw new ParseError(1, `첫 줄이 "%% ${FORMAT} <시각> %%" 형식이 아님`);
   const version = Number(head[1]);
-  const nameFrom = version === 1 ? 8 : version === 2 ? 4 : 3; // v1: id 템플릿 세트 lo hi inc start 이름 / v2: id 템플릿 세트 이름 / v3: id 템플릿 이름
+  // 이름이 시작하는 토큰 위치. v1: ex id 템플릿 세트 lo hi inc start 이름 / v2: ex id 템플릿 세트 이름 / v3: ex id 템플릿 이름 / v4: ex id 이름
+  const nameFrom = version === 1 ? 8 : version === 2 ? 4 : version === 3 ? 3 : 2;
+  const legacy = version < 4; // 템플릿 토큰이 있던 형식
   const doc: Doc = { writtenAt: head[2], exercises: [], sessions: [] };
   const ids = new Set<string>();
   let cur: Session | null = null;
@@ -300,14 +275,16 @@ export function parseLogText(text: string): Doc {
     if (line.startsWith("%%")) {
       if (line.length < 4 || !line.endsWith("%%")) throw new ParseError(ln, "닫는 %% 가 없음");
       const body = line.slice(2, -2).trim();
-      if (!body.startsWith("ex ")) continue; // 그 밖의 주석은 무시
+      const kw = body.split(/\s+/)[0];
+      if (kw !== "ex" && kw !== "hidden") continue; // 그 밖의 주석은 무시
       const t = body.split(/\s+/);
       if (cur) throw new ParseError(ln, "ex 줄은 기록보다 앞에 있어야 함");
-      if (t.length < nameFrom + 1) throw new ParseError(ln, version === 3 ? "ex 줄 형식: ex id 템플릿 이름" : `v${version} ex 줄 형식이 아님`);
+      if (t.length < nameFrom + 1) throw new ParseError(ln, legacy ? `v${version} ex 줄 형식이 아님` : "ex 줄 형식: ex id 이름");
       const id = t[1];
       if (!ID_RE.test(id) || id === "session") throw new ParseError(ln, `id에 공백·%를 쓸 수 없고 session은 예약어: ${id}`);
       if (ids.has(id)) throw new ParseError(ln, `종목 id 중복: ${id}`);
-      doc.exercises.push({ id, template: t[2], name: t.slice(nameFrom).join(" ") });
+      const hidden = kw === "hidden" || (legacy && t[2] === "-");
+      doc.exercises.push({ id, name: t.slice(nameFrom).join(" "), hidden });
       ids.add(id);
       continue;
     }
@@ -315,10 +292,11 @@ export function parseLogText(text: string): Doc {
     const t = line.split(/\s+/);
     if (!DATE_RE.test(t[0])) throw new ParseError(ln, `날짜(YYYY-MM-DD)로 시작하지 않음: ${t[0]}`);
     if (t[1] === "session") {
-      if (t.length < 3 || t.length > 4) throw new ParseError(ln, "session 줄 형식: 날짜 session 템플릿 [HH:MM]");
-      if (t.length === 4 && !TIME_RE.test(t[3])) throw new ParseError(ln, `시각 형식(HH:MM)이 아님: ${t[3]}`);
+      const rest = legacy ? t.slice(3) : t.slice(2); // 옛 형식은 템플릿 토큰을 건너뛴다
+      if ((legacy && t.length < 3) || rest.length > 1) throw new ParseError(ln, "session 줄 형식: 날짜 session [HH:MM]");
+      if (rest.length === 1 && !TIME_RE.test(rest[0])) throw new ParseError(ln, `시각 형식(HH:MM)이 아님: ${rest[0]}`);
       if (cur && t[0] <= cur.date) throw new ParseError(ln, `날짜가 중복되거나 역순: ${t[0]}`);
-      cur = { date: t[0], time: t.length === 4 ? t[3] : null, template: t[2], entries: [] };
+      cur = { date: t[0], time: rest.length === 1 ? rest[0] : null, entries: [] };
       doc.sessions.push(cur);
       continue;
     }
@@ -339,16 +317,16 @@ export function parseLogText(text: string): Doc {
 
 /** 기본 종목 6개, 세션 0개. */
 export function defaultDoc(writtenAt: string = nowIso()): Doc {
-  const ex = (id: string, name: string, template: string): Exercise => ({ id, name, template });
+  const ex = (id: string, name: string): Exercise => ({ id, name, hidden: false });
   return {
     writtenAt,
     exercises: [
-      ex("squat", "스쿼트", "A"),
-      ex("bench", "벤치", "A"),
-      ex("row", "바벨로우", "A"),
-      ex("deadlift", "데드리프트", "B"),
-      ex("ohp", "오버헤드 프레스", "B"),
-      ex("pullup", "턱걸이", "B"),
+      ex("squat", "스쿼트"),
+      ex("bench", "벤치"),
+      ex("row", "바벨로우"),
+      ex("deadlift", "데드리프트"),
+      ex("ohp", "오버헤드 프레스"),
+      ex("pullup", "턱걸이"),
     ],
     sessions: [],
   };

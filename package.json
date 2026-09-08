@@ -1,6 +1,6 @@
 {
   "name": "tlog",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "운동 일지 — Obsidian 플러그인 (점진적 과부하, 변동 일정)",

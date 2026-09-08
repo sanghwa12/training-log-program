@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   localDate, localTime, daysBetween, shiftDate, weekStart, weekday, topKg, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
-  nextSession, templatesOf, todayPlan, toLogText, parseLogText, defaultDoc, newExercise, slugId, removeExercise, restoreExercise, HIDDEN, ParseError,
+  todayBlock, visibleExercises, lastEntryId, toLogText, parseLogText, defaultDoc, newExercise, slugId, removeExercise, restoreExercise, ParseError,
 } from "../src/logic.ts";
 import type { SetRec, Doc, HistItem } from "../src/logic.ts";
 
@@ -61,95 +61,66 @@ test("hints: 공백·같은 무게 연속·직전 변화. 숫자 제안은 없�
   assert.deepEqual(hints(H(["2026-09-05", "55x5"], ["2026-09-03", "60x8"]), "2026-09-05", TODAY), ["직전 55 kg, 그 전 60 kg (-5 kg)"]);
   for (const h of hints(streak, "2026-08-01", TODAY)) assert.ok(!/다음|목표/.test(h));
 });
-// ---------- 세션 순서 ----------
 
-test("nextSession: 빈 기록 → A, 마지막 A → B, 마지막 B → A, 강제 A", () => {
+// ---------- 오늘 ----------
+
+test("todayBlock / lastEntryId / visibleExercises", () => {
   const doc = defaultDoc("x");
-  assert.equal(nextSession(doc.exercises, []).template, "A");
-  assert.deepEqual(nextSession(doc.exercises, []).exercises.map(e => e.id), ["squat", "bench", "row"]);
-  const A = { date: "2026-09-01", time: "18:00", template: "A", entries: [] };
-  const B = { date: "2026-09-03", time: null, template: "B", entries: [] };
-  assert.equal(nextSession(doc.exercises, [A]).template, "B");
-  assert.equal(nextSession(doc.exercises, [A, B]).template, "A");
-  assert.equal(nextSession(doc.exercises, [A], "A").template, "A");
-});
-test("todayPlan: 블록 없음 → null", () => {
-  assert.equal(todayPlan(defaultDoc("x"), TODAY), null);
-});
-test("todayPlan: 진행 중 → 마지막 entry가 현재, 목록 = 블록 순서 + 남은 종목", () => {
-  const doc = defaultDoc("x");
-  doc.sessions = [{ date: TODAY, time: "18:00", template: "A", entries: [
-    { id: "squat", sets: S("60x5 60x5 60x5") },
-    { id: "bench", sets: S("40x5") },
-  ] }];
-  const p = todayPlan(doc, TODAY)!;
-  assert.deepEqual(p.exercises.map(e => e.id), ["squat", "bench", "row"]);
-  assert.equal(p.current, 1);
-});
-test("todayPlan: 세트 수 계획이 없으므로 몇 세트를 했든 현재는 마지막 entry; 건너뛴 종목은 뒤로", () => {
-  const doc = defaultDoc("x");
-  doc.sessions = [{ date: TODAY, time: null, template: "A", entries: [
+  assert.equal(todayBlock(doc, TODAY), null);
+  assert.equal(lastEntryId(null), null);
+  doc.sessions = [{ date: TODAY, time: "18:00", entries: [
     { id: "squat", sets: S("60x5 60x5 60x5") },
     { id: "row", sets: S("40x5") },
   ] }];
-  const p = todayPlan(doc, TODAY)!;
-  assert.deepEqual(p.exercises.map(e => e.id), ["squat", "row", "bench"]);
-  assert.equal(p.current, 1);
-  doc.sessions[0].entries[1].sets = S("40x5 40x5 40x5 40x5 40x5");
-  assert.equal(todayPlan(doc, TODAY)!.current, 1);
-});
-test("todayPlan: entry 없는 블록(손편집) → 현재 0", () => {
-  const doc = defaultDoc("x");
-  doc.sessions = [{ date: TODAY, time: null, template: "B", entries: [] }];
-  const p = todayPlan(doc, TODAY)!;
-  assert.deepEqual(p.exercises.map(e => e.id), ["deadlift", "ohp", "pullup"]);
-  assert.equal(p.current, 0);
+  const b = todayBlock(doc, TODAY)!;
+  assert.equal(b.time, "18:00");
+  assert.equal(lastEntryId(b), "row");
+  assert.deepEqual(visibleExercises(doc).map(e => e.id), ["squat", "bench", "row", "deadlift", "ohp", "pullup"]);
+  doc.exercises[1].hidden = true;
+  assert.deepEqual(visibleExercises(doc).map(e => e.id), ["squat", "row", "deadlift", "ohp", "pullup"]);
 });
 
 // ---------- 종목 관리 ----------
 
 test("newExercise: 이름 → id(공백은 _), 겹치면 _2, 예약어·% 처리", () => {
   const doc = defaultDoc("x");
-  const a = newExercise(doc, " 레그 프레스 ", "A");
-  assert.deepEqual(a, { id: "레그_프레스", name: "레그 프레스", template: "A" });
+  const a = newExercise(doc, " 레그 프레스 ");
+  assert.deepEqual(a, { id: "레그_프레스", name: "레그 프레스", hidden: false });
   doc.exercises.push(a);
-  assert.equal(newExercise(doc, "레그 프레스", "B").id, "레그_프레스_2");
-  assert.equal(newExercise(doc, "session", "A").id, "ex_session");
+  assert.equal(newExercise(doc, "레그 프레스").id, "레그_프레스_2");
+  assert.equal(newExercise(doc, "session").id, "ex_session");
   assert.equal(slugId("50% 세트"), "50_세트");
-  assert.equal(newExercise(doc, "squat", "A").id, "squat_2");
+  assert.equal(newExercise(doc, "squat").id, "squat_2");
 });
-test("removeExercise: 기록 없으면 삭제, 있으면 숨김(-); 숨긴 종목은 세션 목록에서 빠지고 기록은 파싱됨; 복원", () => {
+test("removeExercise: 기록 없으면 삭제, 있으면 숨김; 숨긴 종목은 목록에서 빠지고 기록은 파싱됨; 복원", () => {
   const doc = defaultDoc("2026-09-07T20:15:33+09:00");
   assert.equal(removeExercise(doc, "row"), "deleted");
   assert.ok(!doc.exercises.some(e => e.id === "row"));
-  doc.sessions = [{ date: "2026-09-01", time: "18:00", template: "A", entries: [{ id: "squat", sets: S("60x5 60x5 60x5") }] }];
+  doc.sessions = [{ date: "2026-09-01", time: "18:00", entries: [{ id: "squat", sets: S("60x5 60x5 60x5") }] }];
   assert.equal(removeExercise(doc, "squat"), "hidden");
-  assert.equal(doc.exercises.find(e => e.id === "squat")!.template, HIDDEN);
-  assert.deepEqual(templatesOf(doc.exercises), ["A", "B"]);
-  assert.deepEqual(nextSession(doc.exercises, []).exercises.map(e => e.id), ["bench"]);
+  assert.equal(doc.exercises.find(e => e.id === "squat")!.hidden, true);
+  assert.deepEqual(visibleExercises(doc).map(e => e.id), ["bench", "deadlift", "ohp", "pullup"]);
   assert.equal(removeExercise(doc, "nope"), "missing");
   const text = toLogText(doc);
-  assert.ok(text.includes("%% ex squat - 스쿼트 %%\n"));
+  assert.ok(text.includes("%% hidden squat 스쿼트 %%\n"));
   assert.deepEqual(parseLogText(text), doc);
-  assert.equal(restoreExercise(doc, "squat", "A"), true);
-  assert.deepEqual(nextSession(doc.exercises, []).exercises.map(e => e.id), ["squat", "bench"]);
-  removeExercise(doc, "squat");
-  doc.sessions.push({ date: "2026-09-07", time: null, template: "A", entries: [{ id: "squat", sets: S("60x5") }] });
-  assert.deepEqual(todayPlan(doc, "2026-09-07")!.exercises.map(e => e.id), ["squat", "bench"]);
+  assert.equal(restoreExercise(doc, "squat"), true);
+  assert.deepEqual(visibleExercises(doc).map(e => e.id), ["squat", "bench", "deadlift", "ohp", "pullup"]);
+  assert.equal(restoreExercise(doc, "nope"), false);
 });
 
 // ---------- 텍스트 왕복 ----------
 
 function sampleDoc(): Doc {
   const doc = defaultDoc("2026-09-07T20:15:33+09:00");
-  doc.exercises.push(newExercise(doc, "레그 프레스", "A"));
+  doc.exercises.push(newExercise(doc, "레그 프레스"));
   doc.sessions = [
-    { date: "2026-09-05", time: "18:32", template: "A", entries: [
+    { date: "2026-09-05", time: "18:32", entries: [
       { id: "squat", sets: S("60x8 60x8 60x8") },
       { id: "bench", sets: S("42.5x8 42.5x7 42.5x6") },
       { id: "레그_프레스", sets: S("80x12") },
     ] },
-    { date: "2026-09-07", time: null, template: "B", entries: [
+    { date: "2026-09-07", time: null, entries: [
       { id: "deadlift", sets: S("80x5 80x5") },
       { id: "pullup", sets: S("0x6 0x6 0x5") },
     ] },
@@ -157,15 +128,15 @@ function sampleDoc(): Doc {
   return doc;
 }
 
-test("toLogText → parseLogText 왕복 (v3: 세션 시각, 한글 id·이름, 소수)", () => {
+test("toLogText → parseLogText 왕복 (v4: 세션 시각, 한글 id·이름, 소수)", () => {
   const doc = sampleDoc();
   const text = toLogText(doc);
   assert.deepEqual(parseLogText(text), doc);
-  assert.match(text, /^%% tlog v3 2026-09-07T20:15:33\+09:00 %%\n/);
-  assert.ok(text.includes("\n%% ex ohp B 오버헤드 프레스 %%\n"));
-  assert.ok(text.includes("\n%% ex 레그_프레스 A 레그 프레스 %%\n"));
-  assert.ok(text.includes("\n2026-09-05 session A 18:32\n2026-09-05 squat 60x8 60x8 60x8\n"));
-  assert.ok(text.includes("\n2026-09-07 session B\n2026-09-07 deadlift 80x5 80x5\n"));
+  assert.match(text, /^%% tlog v4 2026-09-07T20:15:33\+09:00 %%\n/);
+  assert.ok(text.includes("\n%% ex ohp 오버헤드 프레스 %%\n"));
+  assert.ok(text.includes("\n%% ex 레그_프레스 레그 프레스 %%\n"));
+  assert.ok(text.includes("\n2026-09-05 session 18:32\n2026-09-05 squat 60x8 60x8 60x8\n"));
+  assert.ok(text.includes("\n2026-09-07 session\n2026-09-07 deadlift 80x5 80x5\n"));
   assert.ok(text.includes("\n2026-09-05 레그_프레스 80x12\n"));
 });
 test("왕복: \\r\\n 입력과 BOM도 같은 문서; 기타 %% 주석·빈 줄 무시", () => {
@@ -173,9 +144,9 @@ test("왕복: \\r\\n 입력과 BOM도 같은 문서; 기타 %% 주석·빈 줄 �
   const text = toLogText(doc);
   assert.deepEqual(parseLogText(text.replace(/\n/g, "\r\n")), doc);
   assert.deepEqual(parseLogText("\uFEFF" + text), doc);
-  assert.deepEqual(parseLogText(text.replace("\n2026-09-05 session A", "\n%% 메모 %%\n\n2026-09-05 session A")), doc);
+  assert.deepEqual(parseLogText(text.replace("\n2026-09-05 session 18:32", "\n%% 메모 %%\n\n2026-09-05 session 18:32")), doc);
 });
-test("v1·v2 파일도 읽힌다(id·템플릿·이름만 취함), 저장은 v3", () => {
+test("v1·v2·v3 파일도 읽힌다(템플릿 토큰은 버리고 '-'는 숨김으로), 저장은 v4", () => {
   const v1 = [
     "%% tlog v1 2026-09-07T20:15:33+09:00 %%",
     "%% ex squat A 3 5 8 5 60 스쿼트 %%",
@@ -184,17 +155,21 @@ test("v1·v2 파일도 읽힌다(id·템플릿·이름만 취함), 저장은 v3"
     "2026-09-05 squat 60x8 60x8 60x8",
     "",
   ].join("\n");
-  const doc = parseLogText(v1);
-  assert.deepEqual(doc.exercises, [
-    { id: "squat", template: "A", name: "스쿼트" },
-    { id: "ohp", template: "B", name: "오버헤드 프레스" },
+  const d1 = parseLogText(v1);
+  assert.deepEqual(d1.exercises, [
+    { id: "squat", name: "스쿼트", hidden: false },
+    { id: "ohp", name: "오버헤드 프레스", hidden: false },
   ]);
-  assert.deepEqual(doc.sessions, [{ date: "2026-09-05", time: null, template: "A", entries: [{ id: "squat", sets: S("60x8 60x8 60x8") }] }]);
-  assert.match(toLogText(doc), /^%% tlog v3 /);
+  assert.deepEqual(d1.sessions, [{ date: "2026-09-05", time: null, entries: [{ id: "squat", sets: S("60x8 60x8 60x8") }] }]);
+  assert.match(toLogText(d1), /^%% tlog v4 /);
   const v2 = "%% tlog v2 2026-09-08T10:00:00+09:00 %%\n%% ex 레그_프레스 A 3 레그 프레스 %%\n2026-09-08 session A 18:32\n2026-09-08 레그_프레스 80x12\n";
   const d2 = parseLogText(v2);
-  assert.deepEqual(d2.exercises, [{ id: "레그_프레스", template: "A", name: "레그 프레스" }]);
+  assert.deepEqual(d2.exercises, [{ id: "레그_프레스", name: "레그 프레스", hidden: false }]);
   assert.equal(d2.sessions[0].time, "18:32");
+  const v3 = "%% tlog v3 2026-09-08T10:00:00+09:00 %%\n%% ex squat A 스쿼트 %%\n%% ex bench - 벤치 %%\n2026-09-08 session B 20:38\n2026-09-08 squat 5x8\n";
+  const d3 = parseLogText(v3);
+  assert.deepEqual(d3.exercises, [{ id: "squat", name: "스쿼트", hidden: false }, { id: "bench", name: "벤치", hidden: true }]);
+  assert.deepEqual(d3.sessions, [{ date: "2026-09-08", time: "20:38", entries: [{ id: "squat", sets: S("5x8") }] }]);
 });
 test("historyOf: 최신 우선, 세트 있는 entry만", () => {
   const doc = sampleDoc();
@@ -204,7 +179,7 @@ test("historyOf: 최신 우선, 세트 있는 entry만", () => {
 
 // ---------- 파서 거부 (줄 번호) ----------
 
-const HEAD = "%% tlog v3 2026-09-07T20:15:33+09:00 %%\n%% ex squat A 스쿼트 %%\n";
+const HEAD = "%% tlog v4 2026-09-07T20:15:33+09:00 %%\n%% ex squat 스쿼트 %%\n";
 function rejects(text: string, line: number, re: RegExp): void {
   assert.throws(() => parseLogText(text), (e: unknown) => {
     assert.ok(e instanceof ParseError, "ParseError가 아님");
@@ -214,32 +189,33 @@ function rejects(text: string, line: number, re: RegExp): void {
   });
 }
 test("거부: 깨진 세트 squat 100x", () => {
-  rejects(HEAD + "2026-09-07 session A\n2026-09-07 squat 60x8 100x\n", 4, /세트 형식/);
+  rejects(HEAD + "2026-09-07 session\n2026-09-07 squat 60x8 100x\n", 4, /세트 형식/);
 });
 test("거부: session 줄 없는 블록", () => {
   rejects(HEAD + "2026-09-07 squat 60x8\n", 3, /session 줄이 없음/);
-  rejects(HEAD + "2026-09-05 session A\n2026-09-07 squat 60x8\n", 4, /session 줄이 없음/);
+  rejects(HEAD + "2026-09-05 session\n2026-09-07 squat 60x8\n", 4, /session 줄이 없음/);
 });
 test("거부: 모르는 id", () => {
-  rejects(HEAD + "2026-09-07 session A\n2026-09-07 bench 40x8\n", 4, /모르는 종목 id: bench/);
+  rejects(HEAD + "2026-09-07 session\n2026-09-07 bench 40x8\n", 4, /모르는 종목 id: bench/);
 });
 test("거부: 중복·역순 날짜", () => {
-  rejects(HEAD + "2026-09-07 session A\n2026-09-07 session B\n", 4, /중복되거나 역순/);
-  rejects(HEAD + "2026-09-07 session A\n2026-09-05 session B\n", 4, /중복되거나 역순/);
+  rejects(HEAD + "2026-09-07 session\n2026-09-07 session\n", 4, /중복되거나 역순/);
+  rejects(HEAD + "2026-09-07 session\n2026-09-05 session\n", 4, /중복되거나 역순/);
 });
-test("거부: 헤더 없음·빈 파일 → 1행", () => {
+test("거부: 헤더 없음·빈 파일·모르는 버전 → 1행", () => {
   rejects("", 1, /첫 줄/);
-  rejects("2026-09-07 session A\n", 1, /첫 줄/);
-  rejects("%% ex squat A 스쿼트 %%\n", 1, /첫 줄/);
-  rejects("%% tlog v4 2026-09-07T20:15:33+09:00 %%\n", 1, /첫 줄/);
+  rejects("2026-09-07 session\n", 1, /첫 줄/);
+  rejects("%% ex squat 스쿼트 %%\n", 1, /첫 줄/);
+  rejects("%% tlog v5 2026-09-07T20:15:33+09:00 %%\n", 1, /첫 줄/);
 });
-test("거부: 닫는 %% 없는 주석 줄, ex 줄 형식, 시각 형식", () => {
-  rejects("%% tlog v3 2026-09-07T20:15:33+09:00 %%\n%% ex squat A 스쿼트\n", 2, /닫는 %%/);
-  rejects("%% tlog v3 2026-09-07T20:15:33+09:00 %%\n%% ex squat A %%\n", 2, /ex 줄 형식/);
-  rejects(HEAD + "2026-09-07 session A 6pm\n", 3, /시각 형식/);
+test("거부: 닫는 %% 없는 주석 줄, ex 줄 형식, session 줄 형식, 시각 형식", () => {
+  rejects("%% tlog v4 2026-09-07T20:15:33+09:00 %%\n%% ex squat 스쿼트\n", 2, /닫는 %%/);
+  rejects("%% tlog v4 2026-09-07T20:15:33+09:00 %%\n%% ex squat %%\n", 2, /ex 줄 형식/);
+  rejects(HEAD + "2026-09-07 session A 18:00\n", 3, /session 줄 형식/);
+  rejects(HEAD + "2026-09-07 session 6pm\n", 3, /시각 형식/);
 });
 test("거부: 같은 날짜에 종목 중복; id에 % 또는 session", () => {
-  rejects(HEAD + "2026-09-07 session A\n2026-09-07 squat 60x8\n2026-09-07 squat 60x8\n", 5, /종목 중복/);
-  rejects("%% tlog v3 2026-09-07T20:15:33+09:00 %%\n%% ex a%b A 이상 %%\n", 2, /id에 공백/);
-  rejects("%% tlog v3 2026-09-07T20:15:33+09:00 %%\n%% ex session A 이상 %%\n", 2, /session은 예약어/);
+  rejects(HEAD + "2026-09-07 session\n2026-09-07 squat 60x8\n2026-09-07 squat 60x8\n", 5, /종목 중복/);
+  rejects("%% tlog v4 2026-09-07T20:15:33+09:00 %%\n%% ex a%b 이상 %%\n", 2, /id에 공백/);
+  rejects("%% tlog v4 2026-09-07T20:15:33+09:00 %%\n%% ex session 이상 %%\n", 2, /session은 예약어/);
 });

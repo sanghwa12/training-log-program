@@ -1,7 +1,7 @@
 {
   "id": "tlog",
   "name": "운동 일지",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "minAppVersion": "1.5.7",
   "description": "점진적 과부하 운동 일지. 세트마다 버튼 1탭으로 기록, 지난번 값 미리 채움, 날짜별 기록과 주간·월간 최고 보기. 무게·횟수·세트 수는 직접 정한다. 기록은 볼트의 tlog.md 하나.",
   "author": "sanghwa12",

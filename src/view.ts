@@ -1,12 +1,12 @@
-// src/view.ts — 뷰 하나에 홈·기록 두 모드. 상태의 원본은 tlog.md이고 여기는 그리기와 탭 처리만.
-// 기록 화면의 핵심은 셋뿐이다: 무게 −/+, 횟수 −/+, 큰 "기록" 버튼. 지난번 값이 미리 채워져 있어 보통은 "기록"만 누른다.
-// 가끔 쓰는 기능(기록 보기·종목 추가·삭제·중간에 끝내기)은 "더보기" 안에 둔다.
+// src/view.ts — 뷰 하나에 홈(종목 목록)·기록 두 모드. 상태의 원본은 tlog.md이고 여기는 그리기와 탭 처리만.
+// 홈은 종목 전체 목록이다(A/B 같은 구분 없음). 종목을 누르면 기록 화면: 무게 −/+, 횟수 −/+, 큰 "기록" 버튼.
+// 지난번 값이 미리 채워져 있어 보통은 "기록"만 누른다. 가끔 쓰는 기능은 "더보기" 안에 둔다.
 import { ItemView, Notice } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 import type TlogPlugin from "./main.ts";
 import {
-  LOG_PATH, GAP_DAYS, HIDDEN, localDate, localTime, weekday, daysBetween, fmtShort, historyOf, hints,
-  weeklyTrend, monthlyTrend, nextSession, templatesOf, todayPlan, defaultDoc, newExercise, removeExercise, restoreExercise, ParseError,
+  LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, historyOf, hints, weeklyTrend, monthlyTrend,
+  todayBlock, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, ParseError,
 } from "./logic.ts";
 import type { Doc, Exercise, Session, SetRec, HistItem } from "./logic.ts";
 import { readDoc, updateDoc, logFile } from "./store.ts";
@@ -27,12 +27,12 @@ const fmtWhen = (iso: string): string => (iso.length >= 16 ? `${fmtShort(iso)} $
 const fmtSets = (sets: SetRec[]): string => sets.map(s => `${s.kg}×${s.reps}`).join("  ");
 const fmtDay = (date: string): string => `${fmtShort(date)} (${weekday(date)})`;
 
-/** 오늘 블록을 뺀 과거 기록. */
-function contextOf(doc: Doc, today: string) {
+/** 오늘 블록을 뺀 과거 기록. 힌트·"지난번"·미리 채움은 과거만 본다. */
+function pastOf(doc: Doc, today: string) {
   const past = doc.sessions.filter(s => s.date !== today);
   const lastS: Session | null = past.length ? past[past.length - 1] : null;
   const histOf = (id: string): HistItem[] => historyOf(past, id);
-  return { past, lastS, lastDate: lastS ? lastS.date : null, histOf };
+  return { lastS, lastDate: lastS ? lastS.date : null, histOf };
 }
 
 export class TlogView extends ItemView {
@@ -41,20 +41,19 @@ export class TlogView extends ItemView {
   error: string | null = null;   // 파싱 오류·덮어쓰기 감지 → 홈 + 잠금
   overwrite = false;             // error가 덮어쓰기 감지인지
   lastWrittenAt = "";            // 마지막으로 보거나 쓴 헤더 시각
-  logMode = false;               // 시작하기/이어하기 이후
-  logDay = "";                   // logMode가 유효한 날짜
-  forceHome = false;             // 세션 끝내기 이후(오늘 블록이 있어도 홈)
-  template: string | null = null; // 홈에서 고른 템플릿(첫 세트 전에만 의미)
-  order: string[] = [];          // 기록 화면 종목 순서(뷰 메모리)
-  current = 0;
+  day = "";                      // 아래 상태가 유효한 날짜
+  logMode = false;               // 기록 화면인가
+  exId = "";                     // 기록 화면의 종목
+  homeChosen = false;            // 오늘 "‹ 목록"을 눌렀으면 다시 열어도 홈에 머문다
   kg: number | null = null;
   reps: number | null = null;
   valFor = "";                   // kg·reps 값이 어느 종목 것인지
   editing: Field | null = null;  // 숫자를 눌러 직접 입력 중인 칸
   editSet: number | null = null; // 오늘 세트 중 수정 중인 것(인덱스)
   menuOpen = false;
-  adding = false;
   showHistory = false;
+  adding = false;                // 홈: 새 종목 입력칸
+  showHidden = false;            // 홈: 숨긴 종목 목록
   confirmDelete = false;
   busy = false;
   private valueEl: Partial<Record<Field, HTMLElement>> = {};
@@ -127,11 +126,16 @@ export class TlogView extends ItemView {
     this.recEl = null;
     const doc = this.doc ?? defaultDoc("");
     const today = localDate();
-    if (this.logDay !== today) { this.logMode = false; this.forceHome = false; this.order = []; }
-    const plan = this.error ? null : todayPlan(doc, today);
-    const inLog = !this.error && (this.logMode || (plan !== null && !this.forceHome));
-    if (inLog) this.renderLog(el, doc, today);
-    else this.renderHome(el, doc, today);
+    if (this.day !== today) { this.day = today; this.logMode = false; this.homeChosen = false; this.resetPanels(); }
+    const block = todayBlock(doc, today);
+    // 0탭 복구: 오늘 기록이 있고 아직 홈을 고르지 않았으면 마지막으로 찍던 종목의 기록 화면으로.
+    if (!this.error && !this.logMode && !this.homeChosen) {
+      const id = lastEntryId(block);
+      if (id && doc.exercises.some(e => e.id === id && !e.hidden)) { this.logMode = true; this.exId = id; }
+    }
+    const ex = doc.exercises.find(e => e.id === this.exId && !e.hidden) ?? null;
+    if (this.logMode && !this.error && ex) this.renderLog(el, doc, today, ex, block);
+    else { this.logMode = false; this.renderHome(el, doc, today, block); }
   }
 
   private renderBanners(el: HTMLElement): void {
@@ -153,65 +157,77 @@ export class TlogView extends ItemView {
     if (!this.doc && !this.error) el.createDiv({ cls: "tlog-note", text: "첫 기록을 하면 tlog.md 파일이 생깁니다" });
   }
 
-  private renderHome(el: HTMLElement, doc: Doc, today: string): void {
+  private renderHome(el: HTMLElement, doc: Doc, today: string, block: Session | null): void {
     this.renderBanners(el);
-    const { past, lastS, histOf } = contextOf(doc, today);
-    const plan = this.error ? null : todayPlan(doc, today);
-    const ns = nextSession(doc.exercises, past, plan ? plan.template : this.template);
-    const template = plan ? plan.template : ns.template;
-    const exercises = plan ? plan.exercises : ns.exercises;
-    const block = doc.sessions.find(s => s.date === today);
-
+    const { lastS, histOf } = pastOf(doc, today);
+    const list = visibleExercises(doc);
+    const hidden = doc.exercises.filter(e => e.hidden);
     const sets = block ? block.entries.reduce((n, e) => n + e.sets.length, 0) : 0;
-    el.createDiv({ cls: "tlog-date", text: `오늘 ${fmtDay(today)}` });
-    const title = el.createDiv({ cls: "tlog-title" });
-    if (plan) title.setText(`오늘 ${template}${block?.time ? ` · ${block.time} 시작` : ""} · ${sets}세트 저장됨`);
-    else if (lastS) title.setText(`다음은 ${template}  (지난번 ${lastS.template} · ${fmtShort(lastS.date)}${lastS.time ? " " + lastS.time : ""}, ${daysBetween(lastS.date, today)}일 전)`);
-    else title.setText(`다음은 ${template}  (첫 세션)`);
-    if (lastS && daysBetween(lastS.date, today) >= GAP_DAYS) el.createDiv({ cls: "tlog-hint", text: `${daysBetween(lastS.date, today)}일 만의 운동` });
 
-    // 종목 목록. 오늘 기록이 있으면 종목을 눌러 바로 그 종목의 기록 화면으로 간다(수정·삭제용).
-    const list = el.createDiv({ cls: "tlog-list" });
-    for (const ex of exercises) {
+    el.createDiv({ cls: "tlog-date", text: `오늘 ${fmtDay(today)}` });
+    if (block) el.createDiv({ cls: "tlog-title", text: `오늘 ${sets}세트 저장됨${block.time ? ` · ${block.time} 시작` : ""}` });
+    else if (lastS) el.createDiv({ cls: "tlog-title", text: `지난 운동 ${fmtShort(lastS.date)}${lastS.time ? " " + lastS.time : ""} · ${daysBetween(lastS.date, today)}일 전` });
+    else el.createDiv({ cls: "tlog-title", text: "첫 운동" });
+    if (lastS && daysBetween(lastS.date, today) >= GAP_DAYS) el.createDiv({ cls: "tlog-hint", text: `${daysBetween(lastS.date, today)}일 만의 운동` });
+    el.createDiv({ cls: "tlog-note", text: list.length ? "종목을 누르면 기록 화면이 열립니다" : "종목이 없습니다. 아래에서 추가하세요." });
+
+    // 종목 목록: 파일 순서. 오늘 세트가 있으면 "오늘:", 없으면 지난번 기록.
+    const listEl = el.createDiv({ cls: "tlog-list" });
+    for (const ex of list) {
       const todaySets = block?.entries.find(e => e.id === ex.id)?.sets ?? [];
       const last = histOf(ex.id)[0];
-      const row = list.createDiv({ cls: plan ? "tlog-item is-link" : "tlog-item" });
-      row.createDiv({ cls: "tlog-item-main", text: plan ? `${ex.name} ›` : ex.name });
+      const row = listEl.createDiv({ cls: this.error ? "tlog-item" : "tlog-item is-link" });
+      row.createDiv({ cls: "tlog-item-main", text: `${ex.name} ›` });
       row.createDiv({ cls: "tlog-sub", text: todaySets.length ? `오늘: ${fmtSets(todaySets)}` : last ? `지난번 ${fmtShort(last.date)}: ${fmtSets(last.sets)}` : "기록 없음" });
-      if (plan && !this.error) row.onclick = () => this.enterLog(doc, today, template, ex.id);
+      if (!this.error) row.onclick = () => this.enterLog(ex.id);
     }
-    if (!exercises.length) el.createDiv({ cls: "tlog-note", text: `${template}에 종목이 없습니다. 시작한 뒤 "더보기 → 종목 추가"로 넣으세요.` });
-    if (plan) el.createDiv({ cls: "tlog-note", text: "종목을 누르면 오늘 기록을 고치거나 지울 수 있습니다" });
 
-    const main = el.createEl("button", { cls: "tlog-main", text: plan ? `이어서 기록하기 (오늘 ${sets}세트)` : `${template} 시작하기` });
-    main.disabled = !!this.error;
-    main.onclick = () => this.enterLog(doc, today, template);
-
+    // 종목 추가 · 숨긴 종목 · 동기화
     const links = el.createDiv({ cls: "tlog-links" });
-    if (!plan) {
-      const ts = templatesOf(doc.exercises);
-      const other = ts.length > 1 ? ts[(ts.indexOf(template) + 1) % ts.length] : null;
-      if (other) {
-        const alt = links.createEl("button", { cls: "tlog-link", text: `${template} 말고 ${other} 하기` });
-        alt.onclick = () => { this.template = other; this.render(); };
-      }
+    const addLink = links.createEl("button", { cls: "tlog-link", text: this.adding ? "추가 취소" : "+ 종목 추가" });
+    addLink.disabled = !!this.error;
+    addLink.onclick = () => { this.adding = !this.adding; this.showHidden = false; this.render(); };
+    if (hidden.length) {
+      const hl = links.createEl("button", { cls: "tlog-link", text: this.showHidden ? "숨긴 종목 닫기" : `숨긴 종목 ${hidden.length}개` });
+      hl.onclick = () => { this.showHidden = !this.showHidden; this.adding = false; this.render(); };
     }
     const sync = links.createEl("button", { cls: "tlog-link", text: "동기화" });
     sync.disabled = !!this.error;
     sync.onclick = () => { this.plugin.sync(); };
+    if (this.adding) {
+      const form = el.createDiv({ cls: "tlog-newex" });
+      const nameIn = form.createEl("input", { cls: "tlog-nameinput", type: "text", placeholder: "종목 이름 (예: 레그프레스)" });
+      const addBtn = form.createEl("button", { text: "추가" });
+      addBtn.disabled = this.busy;
+      addBtn.onclick = () => void this.addExercise(nameIn.value);
+      nameIn.onkeydown = (e: KeyboardEvent) => { if (e.key === "Enter") void this.addExercise(nameIn.value); };
+      window.setTimeout(() => nameIn.focus(), 0);
+    }
+    if (this.showHidden) {
+      const box = el.createDiv({ cls: "tlog-add" });
+      box.createDiv({ cls: "tlog-note", text: "숨긴 종목 (누르면 목록에 복원)" });
+      for (const hx of hidden) {
+        const b = box.createEl("button", { cls: "tlog-pick", text: hx.name });
+        b.disabled = this.busy;
+        b.onclick = () => void this.restoreHidden(hx.id);
+      }
+    }
 
     el.createDiv({ cls: "tlog-footer", text: `tlog ${this.plugin.manifest.version} · 마지막 기록 ${doc.writtenAt ? fmtWhen(doc.writtenAt) : "없음"}` });
   }
 
-  private enterLog(doc: Doc, today: string, template: string, focusId: string | null = null): void {
-    const plan = todayPlan(doc, today);
+  private enterLog(id: string): void {
     this.logMode = true;
-    this.logDay = today;
-    this.forceHome = false;
-    this.template = template;
-    this.order = [];
-    const focus = plan && focusId ? plan.exercises.findIndex(e => e.id === focusId) : -1;
-    this.current = focus >= 0 ? focus : plan ? plan.current : 0;
+    this.exId = id;
+    this.homeChosen = false;
+    this.valFor = "";
+    this.resetPanels();
+    this.render();
+  }
+
+  private goHome(): void {
+    this.logMode = false;
+    this.homeChosen = true;
     this.resetPanels();
     this.render();
   }
@@ -220,29 +236,17 @@ export class TlogView extends ItemView {
     this.editing = null;
     this.editSet = null;
     this.menuOpen = false;
-    this.adding = false;
     this.showHistory = false;
+    this.adding = false;
+    this.showHidden = false;
     this.confirmDelete = false;
   }
 
-  private renderLog(el: HTMLElement, doc: Doc, today: string): void {
-    const { past, lastDate, histOf } = contextOf(doc, today);
-    const plan = todayPlan(doc, today);
-    const byId = new Map(doc.exercises.map(e => [e.id, e] as const));
-    const ids = plan ? plan.exercises.map(e => e.id) : nextSession(doc.exercises, past, this.template).exercises.map(e => e.id);
-    if (!this.order.length) {
-      this.order = ids.slice();
-      if (plan && !this.logMode) this.current = plan.current; // 앱 재시작 후 0탭 복구
-      this.logMode = true;
-      this.logDay = today;
-    } else {
-      for (const id of ids) if (!this.order.includes(id)) this.order.push(id);
-    }
-    this.order = this.order.filter(id => byId.has(id));
-    if (!this.order.length) { this.renderEmptyLog(el, doc, today); return; }
-    if (this.current >= this.order.length) this.current = this.order.length - 1;
-    const ex = byId.get(this.order[this.current]) as Exercise;
-    const block = doc.sessions.find(s => s.date === today) ?? null;
+  private renderLog(el: HTMLElement, doc: Doc, today: string, ex: Exercise, block: Session | null): void {
+    const { lastDate, histOf } = pastOf(doc, today);
+    const list = visibleExercises(doc);
+    const idx = list.findIndex(e => e.id === ex.id);
+    const nextEx: Exercise | null = idx >= 0 && idx + 1 < list.length ? list[idx + 1] : null;
     const sets = block?.entries.find(e => e.id === ex.id)?.sets ?? [];
     const hist = histOf(ex.id);                       // 과거만: 힌트·지난번·미리 채움용
     const allHist = historyOf(doc.sessions, ex.id);    // 오늘 포함: 기록 보기용
@@ -255,10 +259,10 @@ export class TlogView extends ItemView {
       this.valFor = ex.id;
     }
 
-    el.createDiv({ cls: "tlog-date", text: `${fmtDay(today)} · ${block ? `${block.template}${block.time ? " " + block.time : ""}` : (this.template ?? "")}` });
+    el.createDiv({ cls: "tlog-date", text: `${fmtDay(today)} · ${block?.time ? `${block.time} 시작` : "오늘 첫 기록 전"}` });
     const head = el.createDiv({ cls: "tlog-head" });
     head.createDiv({ cls: "tlog-exname", text: ex.name });
-    head.createDiv({ cls: "tlog-sub", text: `${this.current + 1}/${this.order.length}` });
+    head.createDiv({ cls: "tlog-sub", text: idx >= 0 ? `${idx + 1}/${list.length}` : "" });
     el.createDiv({ cls: "tlog-last", text: last ? `지난번 ${fmtShort(last.date)}: ${fmtSets(last.sets)}` : "첫 기록" });
     for (const h of hints(hist, lastDate, today)) el.createDiv({ cls: "tlog-hint", text: h });
 
@@ -295,30 +299,24 @@ export class TlogView extends ItemView {
     });
     if (sets.length && editIdx == null) el.createDiv({ cls: "tlog-note", text: "세트를 누르면 고치거나 지울 수 있습니다" });
 
-    // 이동: 마지막 종목에서는 "세션 끝내기"
+    // 이동: 목록으로, 또는 목록 순서상 다음 종목으로
     const nav = el.createDiv({ cls: "tlog-row" });
-    const prev = nav.createEl("button", { text: "‹ 이전" });
-    prev.disabled = this.current === 0;
-    prev.onclick = () => this.go(this.current - 1);
-    const isLast = this.current >= this.order.length - 1;
-    const next = nav.createEl("button", { cls: "tlog-next", text: isLast ? "세션 끝내기 ✓" : `다음: ${(byId.get(this.order[this.current + 1]) as Exercise).name} ›` });
-    next.onclick = () => (isLast ? this.endSession() : this.go(this.current + 1));
+    const home = nav.createEl("button", { text: "‹ 목록" });
+    home.onclick = () => this.goHome();
+    const next = nav.createEl("button", { cls: "tlog-next", text: nextEx ? `다음: ${nextEx.name} ›` : "다음 ›" });
+    next.disabled = !nextEx;
+    next.onclick = () => { if (nextEx) this.enterLog(nextEx.id); };
 
     // 더보기
     const more = el.createEl("button", { cls: "tlog-link", text: this.menuOpen ? "닫기" : "더보기 ⋯" });
-    more.onclick = () => { this.menuOpen = !this.menuOpen; this.adding = false; this.showHistory = false; this.confirmDelete = false; this.render(); };
+    more.onclick = () => { this.menuOpen = !this.menuOpen; this.showHistory = false; this.confirmDelete = false; this.render(); };
     if (this.menuOpen) {
       const menu = el.createDiv({ cls: "tlog-menu" });
       const hb = menu.createEl("button", { text: this.showHistory ? "기록 닫기" : `기록 보기 (${allHist.length}회)` });
-      hb.onclick = () => { this.showHistory = !this.showHistory; this.adding = false; this.render(); };
+      hb.onclick = () => { this.showHistory = !this.showHistory; this.render(); };
       if (this.showHistory) this.renderHistory(menu, allHist);
-      const ab = menu.createEl("button", { text: this.adding ? "종목 추가 닫기" : "종목 추가" });
-      ab.onclick = () => { this.adding = !this.adding; this.showHistory = false; this.render(); };
-      if (this.adding) this.renderAddPanel(menu, doc, histOf);
-      if (!isLast) {
-        const endBtn = menu.createEl("button", { text: "세션 끝내기" });
-        endBtn.onclick = () => this.endSession();
-      }
+      const syncBtn = menu.createEl("button", { text: "동기화" });
+      syncBtn.onclick = () => { this.plugin.sync(); };
       const delBtn = menu.createEl("button", { cls: "tlog-danger", text: this.confirmDelete ? "정말 삭제? (다시 누르면 삭제)" : `"${ex.name}" 삭제` });
       delBtn.disabled = this.busy;
       delBtn.onclick = () => {
@@ -330,7 +328,7 @@ export class TlogView extends ItemView {
           return;
         }
         this.confirmDelete = false;
-        void this.removeCurrent(ex.id);
+        void this.removeExercise(ex.id);
       };
     }
   }
@@ -374,50 +372,6 @@ export class TlogView extends ItemView {
     this.bindRepeat(plus, field, 1);
   }
 
-  /** 오늘 목록에 종목이 하나도 없을 때(전부 삭제 등). */
-  private renderEmptyLog(el: HTMLElement, doc: Doc, today: string): void {
-    const { histOf } = contextOf(doc, today);
-    el.createDiv({ cls: "tlog-date", text: `${fmtDay(today)} · ${this.template ?? ""}` });
-    el.createDiv({ cls: "tlog-note", text: "오늘 할 종목이 없습니다. 종목을 고르거나 새로 만드세요." });
-    this.renderAddPanel(el, doc, histOf);
-    const home = el.createEl("button", { cls: "tlog-link", text: "홈으로" });
-    home.onclick = () => { this.logMode = false; this.forceHome = true; this.render(); };
-  }
-
-  /** 종목 추가: 저장된 종목에서 고르거나 새 이름을 입력. 숨긴 종목은 여기서 복원. */
-  private renderAddPanel(el: HTMLElement, doc: Doc, histOf: (id: string) => HistItem[]): void {
-    const box = el.createDiv({ cls: "tlog-add" });
-    const candidates = doc.exercises.filter(e => !this.order.includes(e.id) && e.template !== HIDDEN);
-    if (candidates.length) box.createDiv({ cls: "tlog-note", text: "저장된 종목" });
-    for (const c of candidates) {
-      const l = histOf(c.id)[0];
-      const b = box.createEl("button", { cls: "tlog-pick", text: `${c.name}  ${l ? `지난번 ${fmtShort(l.date)} ${fmtSets(l.sets)}` : "기록 없음"}` });
-      b.onclick = () => { this.insertAfterCurrent(c.id); this.go(this.order.indexOf(c.id)); };
-    }
-    const hidden = doc.exercises.filter(e => e.template === HIDDEN && !this.order.includes(e.id));
-    if (hidden.length) {
-      box.createDiv({ cls: "tlog-note", text: "숨긴 종목 (누르면 복원)" });
-      for (const hx of hidden) {
-        const b = box.createEl("button", { cls: "tlog-pick", text: hx.name });
-        b.disabled = this.busy;
-        b.onclick = () => void this.restoreHidden(hx.id);
-      }
-    }
-    box.createDiv({ cls: "tlog-note", text: "새 종목" });
-    const form = box.createDiv({ cls: "tlog-newex" });
-    const nameIn = form.createEl("input", { cls: "tlog-nameinput", type: "text", placeholder: "종목 이름 (예: 레그프레스)" });
-    const addBtn = form.createEl("button", { text: "추가" });
-    addBtn.disabled = this.busy;
-    addBtn.onclick = () => void this.addExercise(nameIn.value);
-    nameIn.onkeydown = (e: KeyboardEvent) => { if (e.key === "Enter") void this.addExercise(nameIn.value); };
-  }
-
-  private insertAfterCurrent(id: string): void {
-    if (this.order.includes(id)) return;
-    if (!this.order.length) { this.order = [id]; this.current = 0; return; }
-    this.order.splice(this.current + 1, 0, id);
-  }
-
   private renderHistory(el: HTMLElement, hist: HistItem[]): void {
     const box = el.createDiv({ cls: "tlog-hist" });
     if (!hist.length) { box.createDiv({ cls: "tlog-note", text: "아직 기록이 없습니다" }); return; }
@@ -430,30 +384,14 @@ export class TlogView extends ItemView {
     for (const p of monthlyTrend(hist)) box.createDiv({ cls: "tlog-hist-row", text: `${p.label}  ${p.topKg} kg  (${p.best.kg}×${p.best.reps}, ${p.sessions}회)` });
   }
 
-  private go(i: number): void {
-    this.current = Math.max(0, Math.min(i, this.order.length - 1));
-    this.resetPanels();
-    this.render();
-  }
-
-  private endSession(): void {
-    this.logMode = false;
-    this.forceHome = true;
-    this.order = [];
-    this.resetPanels();
-    this.plugin.sync();
-    this.render();
-  }
-
   // ---------- 쓰기 ----------
 
   private async logSet(): Promise<void> {
     if (this.busy) return;
-    const exId = this.order[this.current];
+    const exId = this.exId;
     const kg = this.kg ?? 0;
     const reps = this.reps ?? DEFAULT_REPS;
     const today = localDate();
-    const chosen = this.template;
     this.busy = true;
     this.render();
     try {
@@ -462,8 +400,7 @@ export class TlogView extends ItemView {
         if (!s) {
           const last = doc.sessions.length ? doc.sessions[doc.sessions.length - 1] : null;
           if (last && last.date > today) throw new Error(`파일의 마지막 날짜(${last.date})가 오늘보다 뒤입니다`);
-          const template = chosen ?? nextSession(doc.exercises, doc.sessions).template;
-          s = { date: today, time: localTime(), template, entries: [] };
+          s = { date: today, time: localTime(), entries: [] };
           doc.sessions.push(s);
         }
         let e = s.entries.find(x => x.id === exId);
@@ -481,7 +418,7 @@ export class TlogView extends ItemView {
   /** 오늘의 i번째 세트를 현재 무게·횟수로 바꾼다. */
   private async updateSet(i: number): Promise<void> {
     if (this.busy) return;
-    const exId = this.order[this.current];
+    const exId = this.exId;
     const kg = this.kg ?? 0;
     const reps = this.reps ?? DEFAULT_REPS;
     const today = localDate();
@@ -506,7 +443,7 @@ export class TlogView extends ItemView {
   /** 오늘의 i번째 세트를 지운다. 종목·블록이 비면 그 줄도 지운다. */
   private async deleteSet(i: number): Promise<void> {
     if (this.busy) return;
-    const exId = this.order[this.current];
+    const exId = this.exId;
     const today = localDate();
     this.busy = true;
     this.render();
@@ -529,26 +466,25 @@ export class TlogView extends ItemView {
     await this.load();
   }
 
-  /** 새 종목을 파일에 저장하고 현재 종목 뒤에 넣어 그리로 이동한다. */
+  /** 새 종목을 파일에 저장하고 그 종목의 기록 화면으로 간다. */
   private async addExercise(name: string): Promise<void> {
     if (this.busy) return;
     if (!name.trim()) { new Notice("종목 이름을 입력하세요"); return; }
-    const today = localDate();
-    const chosen = this.template;
     let newId = "";
     this.busy = true;
     this.render();
     try {
       await updateDoc(this.app, (doc) => {
-        const block = doc.sessions.find(s => s.date === today);
-        const template = block?.template ?? chosen ?? nextSession(doc.exercises, doc.sessions).template;
-        const ex = newExercise(doc, name, template);
+        const ex = newExercise(doc, name);
         doc.exercises.push(ex);
         newId = ex.id;
       });
       this.plugin.lastWriteAt = Date.now();
-      this.insertAfterCurrent(newId);
-      this.current = this.order.indexOf(newId);
+      // 파일을 다시 읽은 뒤 그려야 새 종목이 보이므로 상태만 바꾸고 load()에 맡긴다.
+      this.logMode = true;
+      this.exId = newId;
+      this.homeChosen = false;
+      this.valFor = "";
       this.resetPanels();
     } catch (e) {
       new Notice(e instanceof ParseError ? `${LOG_PATH} ${e.message}` : `종목 추가 실패: ${String(e)}`);
@@ -557,8 +493,8 @@ export class TlogView extends ItemView {
     await this.load();
   }
 
-  /** 현재 종목을 파일에서 삭제(기록 없음) 또는 숨김(기록 있음)하고 이웃 종목으로 간다. */
-  private async removeCurrent(id: string): Promise<void> {
+  /** 종목을 파일에서 삭제(기록 없음) 또는 숨김(기록 있음)하고 목록으로 간다. */
+  private async removeExercise(id: string): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     this.render();
@@ -566,39 +502,29 @@ export class TlogView extends ItemView {
     try {
       await updateDoc(this.app, (doc) => { out.result = removeExercise(doc, id); });
       this.plugin.lastWriteAt = Date.now();
-      const i = this.order.indexOf(id);
-      if (i >= 0) this.order.splice(i, 1);
-      if (this.current >= this.order.length) this.current = Math.max(0, this.order.length - 1);
-      this.resetPanels();
-      new Notice(out.result === "hidden" ? "지난 기록이 있어 목록에서만 숨겼습니다 (더보기 → 종목 추가 → 숨긴 종목에서 복원)" : "종목을 삭제했습니다");
+      new Notice(out.result === "hidden" ? "지난 기록이 있어 목록에서만 숨겼습니다 (홈의 \"숨긴 종목\"에서 복원)" : "종목을 삭제했습니다");
     } catch (e) {
       new Notice(e instanceof ParseError ? `${LOG_PATH} ${e.message}` : `삭제 실패: ${String(e)}`);
     }
     this.busy = false;
+    this.goHome();
     await this.load();
   }
 
-  /** 숨긴 종목을 오늘 템플릿으로 되돌리고 현재 종목 뒤에 넣는다. */
+  /** 숨긴 종목을 목록에 되돌린다. */
   private async restoreHidden(id: string): Promise<void> {
     if (this.busy) return;
-    const today = localDate();
-    const chosen = this.template;
     this.busy = true;
     this.render();
     try {
-      await updateDoc(this.app, (doc) => {
-        const block = doc.sessions.find(s => s.date === today);
-        const template = block?.template ?? chosen ?? nextSession(doc.exercises, doc.sessions).template;
-        restoreExercise(doc, id, template);
-      });
+      await updateDoc(this.app, (doc) => { restoreExercise(doc, id); });
       this.plugin.lastWriteAt = Date.now();
-      this.insertAfterCurrent(id);
-      this.current = this.order.indexOf(id);
-      this.resetPanels();
     } catch (e) {
       new Notice(e instanceof ParseError ? `${LOG_PATH} ${e.message}` : `복원 실패: ${String(e)}`);
     }
     this.busy = false;
+    this.showHidden = false;
+    this.homeChosen = true; // 홈에서 관리 중이므로 오늘 기록 화면으로 튀지 않게
     await this.load();
   }
 
