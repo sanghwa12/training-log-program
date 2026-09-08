@@ -17,9 +17,10 @@ export default class TlogPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       window.setTimeout(() => void this.open(), OPEN_DELAY_MS);
     });
-    // iOS는 앱을 서스펜드로 두므로 다시 보일 때 미동기화 기록이 있으면 한 번 더 올린다.
+    // 미동기화 기록이 있으면 앱을 벗어날 때(다른 앱·PC로 넘어갈 때)와 다시 돌아올 때 한 번씩 올린다.
+    // iOS는 앱을 서스펜드로 두므로 시작 시 동기화만으로는 늦다.
     this.registerDomEvent(document, "visibilitychange", () => {
-      if (document.visibilityState === "visible" && this.lastWriteAt > this.lastSyncAt) this.sync();
+      if (this.lastWriteAt > this.lastSyncAt) this.sync(true);
     });
   }
 
@@ -36,12 +37,12 @@ export default class TlogPlugin extends Plugin {
     await ws.revealLeaf(leaf);
   }
 
-  /** Remotely Save 동기화 실행. 명령이 없으면 안내만. */
-  sync(): boolean {
+  /** Remotely Save 동기화 실행. 명령이 없으면 안내만(quiet면 조용히). */
+  sync(quiet: boolean = false): boolean {
     const commands = (this.app as unknown as { commands?: { executeCommandById?: (id: string) => boolean } }).commands;
     const ok = commands?.executeCommandById?.(SYNC_COMMAND) === true;
     if (ok) this.lastSyncAt = Date.now();
-    else new Notice("기록은 저장됐습니다. 동기화는 건너뜀 (이 볼트에 Remotely Save 없음)");
+    else if (!quiet) new Notice("기록은 저장됐습니다. 동기화는 건너뜀 (이 볼트에 Remotely Save 없음)");
     return ok;
   }
 }
