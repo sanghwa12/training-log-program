@@ -17,7 +17,8 @@ export type Entry = { id: string; sets: SetRec[] };
 export type Session = { date: string; time: string | null; entries: Entry[] };
 export type Doc = { writtenAt: string; exercises: Exercise[]; sessions: Session[] };
 export type HistItem = { date: string; sets: SetRec[] };
-export type Period = { key: string; label: string; topKg: number; best: SetRec; sessions: number };
+/** 기간 요약. vol = 그 기간 세션 총량(kg×횟수 합)의 최고. */
+export type Period = { key: string; label: string; vol: number; best: SetRec; sessions: number };
 
 export class ParseError extends Error {
   line: number;
@@ -90,7 +91,11 @@ export const fmtShort = (date: string): string => `${Number(date.slice(5, 7))}/$
 
 // ---------- 세트 요약 ----------
 
-export const topKg = (sets: SetRec[]): number => (sets.length ? Math.max(...sets.map(s => s.kg)) : 0);
+/** 세션 총량 = 세트마다 kg×횟수의 합. 점진적 과부하는 이 수치로 본다(무게·횟수·세트 수 중 무엇을 늘리든 잡힌다). */
+export const volume = (sets: SetRec[]): number => round2(sets.reduce((v, s) => v + s.kg * s.reps, 0));
+
+/** 1680 → "1,680". */
+export const fmtVol = (v: number): string => round2(v).toLocaleString("en-US");
 
 /** 최고 세트: 무게가 높은 것, 같으면 횟수가 많은 것. */
 export function bestSet(sets: SetRec[]): SetRec | null {
@@ -116,11 +121,11 @@ function summarize(hist: HistItem[], keyOf: (d: string) => string, labelOf: (d: 
     let p = out.length && out[out.length - 1].key === key ? out[out.length - 1] : null;
     if (!p) {
       if (out.length >= limit) break;
-      p = { key, label: labelOf(h.date), topKg: 0, best: { kg: 0, reps: 0 }, sessions: 0 };
+      p = { key, label: labelOf(h.date), vol: 0, best: { kg: 0, reps: 0 }, sessions: 0 };
       out.push(p);
     }
     p.sessions++;
-    p.topKg = Math.max(p.topKg, topKg(h.sets));
+    p.vol = Math.max(p.vol, volume(h.sets));
     const b = bestSet(h.sets);
     if (b && (b.kg > p.best.kg || (b.kg === p.best.kg && b.reps > p.best.reps))) p.best = b;
   }
@@ -138,10 +143,10 @@ export function monthlyTrend(hist: HistItem[], limit: number = 6): Period[] {
 }
 
 /**
- * 정보성 힌트. 숫자를 제안하지 않고 사실만 말한다.
- *  - 마지막 세션(어느 템플릿이든)이 GAP_DAYS 이상 전
- *  - 같은 최고 무게가 SAME_STREAK 세션 이상 이어짐
- *  - 직전 세션과 그 전 세션의 최고 무게가 다름(변화량)
+ * 정보성 힌트. 숫자를 제안하지 않고 사실만 말한다. 기준은 세션 총량(kg×횟수 합).
+ *  - 마지막 세션이 GAP_DAYS 이상 전
+ *  - 같은 총량이 SAME_STREAK 세션 이상 이어짐
+ *  - 직전 세션과 그 전 세션의 총량이 다름(변화량)
  */
 export function hints(hist: HistItem[], lastSessionDate: string | null, today: string): string[] {
   const out: string[] = [];
@@ -150,15 +155,15 @@ export function hints(hist: HistItem[], lastSessionDate: string | null, today: s
     if (n >= GAP_DAYS) out.push(`${n}일 만의 운동`);
   }
   if (hist.length) {
-    const W = topKg(hist[0].sets);
+    const W = volume(hist[0].sets);
     let n = 0;
-    for (const h of hist) { if (topKg(h.sets) === W) n++; else break; }
-    if (n >= SAME_STREAK) out.push(`${W} kg로 ${n}세션 연속 (${fmtShort(hist[n - 1].date)}부터)`);
+    for (const h of hist) { if (volume(h.sets) === W) n++; else break; }
+    if (n >= SAME_STREAK) out.push(`총량 ${fmtVol(W)} kg로 ${n}세션 연속 (${fmtShort(hist[n - 1].date)}부터)`);
     if (hist.length >= 2) {
-      const P = topKg(hist[1].sets);
+      const P = volume(hist[1].sets);
       if (P !== W) {
         const d = round2(W - P);
-        out.push(`직전 ${W} kg, 그 전 ${P} kg (${d > 0 ? "+" : ""}${d} kg)`);
+        out.push(`직전 총량 ${fmtVol(W)} kg, 그 전 ${fmtVol(P)} kg (${d > 0 ? "+" : "-"}${fmtVol(Math.abs(d))} kg)`);
       }
     }
   }
@@ -170,6 +175,16 @@ export function hints(hist: HistItem[], lastSessionDate: string | null, today: s
 /** 오늘 블록(세션). 없으면 null. */
 export function todayBlock(doc: Doc, today: string): Session | null {
   return doc.sessions.find(s => s.date === today) ?? null;
+}
+
+/** 그 날짜의 세션. 없으면 날짜 순서를 지켜 끼워 넣는다(지난 날짜 기록 보충용). */
+export function sessionAt(doc: Doc, date: string, time: string | null): Session {
+  const found = doc.sessions.find(s => s.date === date);
+  if (found) return found;
+  const s: Session = { date, time, entries: [] };
+  const i = doc.sessions.findIndex(x => x.date > date);
+  if (i < 0) doc.sessions.push(s); else doc.sessions.splice(i, 0, s);
+  return s;
 }
 
 /** 숨기지 않은 종목, 파일 순서 그대로. 홈 목록이자 "다음 ›" 순서. */
@@ -221,6 +236,15 @@ export function restoreExercise(doc: Doc, id: string): boolean {
   const ex = doc.exercises.find(e => e.id === id);
   if (!ex) return false;
   ex.hidden = false;
+  return true;
+}
+
+/** 표시 이름만 바꾼다. id는 기록 줄의 열쇠이므로 그대로 둔다. 빈 이름이면 false. */
+export function renameExercise(doc: Doc, id: string, name: string): boolean {
+  const ex = doc.exercises.find(e => e.id === id);
+  const clean = name.trim();
+  if (!ex || !clean) return false;
+  ex.name = clean;
   return true;
 }
 

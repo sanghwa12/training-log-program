@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  localDate, localTime, daysBetween, shiftDate, weekStart, weekday, topKg, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
-  todayBlock, visibleExercises, lastEntryId, toLogText, parseLogText, defaultDoc, newExercise, slugId, removeExercise, restoreExercise, ParseError,
+  localDate, localTime, daysBetween, shiftDate, weekStart, weekday, volume, fmtVol, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
+  todayBlock, sessionAt, visibleExercises, lastEntryId, toLogText, parseLogText, defaultDoc, newExercise, slugId, removeExercise, restoreExercise,
+  renameExercise, ParseError,
 } from "../src/logic.ts";
 import type { SetRec, Doc, HistItem } from "../src/logic.ts";
 
@@ -32,33 +33,37 @@ test("daysBetween / shiftDate / weekStart(월요일) / weekday", () => {
 
 // ---------- 세트 요약·추세 ----------
 
-test("topKg / bestSet: 무게 우선, 같으면 횟수", () => {
-  assert.equal(topKg(S("40x8 42.5x5 42.5x6")), 42.5);
+test("volume: kg×횟수 합(소수 둘째 자리) / fmtVol 천 단위 쉼표 / bestSet: 무게 우선, 같으면 횟수", () => {
+  assert.equal(volume(S("35x12 35x12 35x12 35x12")), 1680);
+  assert.equal(volume(S("27.5x12 2.5x5")), 342.5);
+  assert.equal(volume([]), 0);
+  assert.equal(fmtVol(1680), "1,680");
+  assert.equal(fmtVol(342.5), "342.5");
   assert.deepEqual(bestSet(S("40x8 42.5x5 42.5x6")), { kg: 42.5, reps: 6 });
   assert.equal(bestSet([]), null);
-  assert.equal(topKg([]), 0);
 });
-test("weeklyTrend: 주별 최고 무게·최고 세트·세션 수, 최신 주부터, 기록 있는 주만", () => {
+test("weeklyTrend: 주별 최고 총량·최고 세트·세션 수, 최신 주부터, 기록 있는 주만", () => {
   const hist = H(["2026-09-08", "62.5x8 62.5x7"], ["2026-09-03", "60x8 60x8"], ["2026-09-01", "60x6 60x6"], ["2026-08-20", "57.5x8"]);
   const w = weeklyTrend(hist);
-  assert.deepEqual(w.map(p => [p.label, p.topKg, p.best, p.sessions]), [
-    ["9/7~9/13", 62.5, { kg: 62.5, reps: 8 }, 1],
-    ["8/31~9/6", 60, { kg: 60, reps: 8 }, 2],
-    ["8/17~8/23", 57.5, { kg: 57.5, reps: 8 }, 1],
+  assert.deepEqual(w.map(p => [p.label, p.vol, p.best, p.sessions]), [
+    ["9/7~9/13", 937.5, { kg: 62.5, reps: 8 }, 1],
+    ["8/31~9/6", 960, { kg: 60, reps: 8 }, 2],
+    ["8/17~8/23", 460, { kg: 57.5, reps: 8 }, 1],
   ]);
   assert.equal(weeklyTrend(hist, 2).length, 2);
 });
 test("monthlyTrend: 월별", () => {
   const hist = H(["2026-09-08", "62.5x8"], ["2026-09-01", "60x6"], ["2026-08-20", "57.5x8"], ["2026-06-01", "50x5"]);
-  assert.deepEqual(monthlyTrend(hist).map(p => [p.label, p.topKg, p.sessions]), [["2026년 9월", 62.5, 2], ["2026년 8월", 57.5, 1], ["2026년 6월", 50, 1]]);
+  assert.deepEqual(monthlyTrend(hist).map(p => [p.label, p.vol, p.sessions]), [["2026년 9월", 500, 2], ["2026년 8월", 460, 1], ["2026년 6월", 250, 1]]);
 });
-test("hints: 공백·같은 무게 연속·직전 변화. 숫자 제안은 없음", () => {
+test("hints: 공백·같은 총량 연속·직전 총량 변화(횟수만 늘어도 잡힘). 숫자 제안은 없음", () => {
   assert.deepEqual(hints([], null, TODAY), []);
   assert.deepEqual(hints(H(["2026-08-20", "60x8"]), "2026-08-20", TODAY), ["19일 만의 운동"]);
-  const streak = H(["2026-09-05", "60x8"], ["2026-09-03", "60x7 60x6"], ["2026-09-01", "60x5"], ["2026-08-28", "57.5x8"]);
-  assert.deepEqual(hints(streak, "2026-09-05", TODAY), ["60 kg로 3세션 연속 (9/1부터)"]);
-  assert.deepEqual(hints(H(["2026-09-05", "62.5x5"], ["2026-09-03", "60x8"]), "2026-09-05", TODAY), ["직전 62.5 kg, 그 전 60 kg (+2.5 kg)"]);
-  assert.deepEqual(hints(H(["2026-09-05", "55x5"], ["2026-09-03", "60x8"]), "2026-09-05", TODAY), ["직전 55 kg, 그 전 60 kg (-5 kg)"]);
+  const streak = H(["2026-09-05", "60x8 60x8"], ["2026-09-03", "60x8 60x8"], ["2026-09-01", "60x8 60x8"], ["2026-08-28", "57.5x8"]);
+  assert.deepEqual(hints(streak, "2026-09-05", TODAY), ["총량 960 kg로 3세션 연속 (9/1부터)"]);
+  const reps = H(["2026-09-05", "35x12 35x12 35x12 35x12"], ["2026-09-03", "35x12 35x12 35x12 35x11"]);
+  assert.deepEqual(hints(reps, "2026-09-05", TODAY), ["직전 총량 1,680 kg, 그 전 1,645 kg (+35 kg)"]);
+  assert.deepEqual(hints(H(["2026-09-05", "55x5"], ["2026-09-03", "60x8"]), "2026-09-05", TODAY), ["직전 총량 275 kg, 그 전 480 kg (-205 kg)"]);
   for (const h of hints(streak, "2026-08-01", TODAY)) assert.ok(!/다음|목표/.test(h));
 });
 
@@ -78,6 +83,20 @@ test("todayBlock / lastEntryId / visibleExercises", () => {
   assert.deepEqual(visibleExercises(doc).map(e => e.id), ["squat", "bench", "row", "deadlift", "ohp", "pullup"]);
   doc.exercises[1].hidden = true;
   assert.deepEqual(visibleExercises(doc).map(e => e.id), ["squat", "row", "deadlift", "ohp", "pullup"]);
+});
+test("sessionAt: 있으면 그 세션, 없으면 날짜 순서를 지켜 끼워 넣음(지난 날짜 보충)", () => {
+  const doc = defaultDoc("x");
+  doc.sessions = [
+    { date: "2026-09-01", time: "18:00", entries: [{ id: "squat", sets: S("60x5") }] },
+    { date: "2026-09-08", time: "18:00", entries: [{ id: "squat", sets: S("60x5") }] },
+  ];
+  assert.equal(sessionAt(doc, "2026-09-08", null), doc.sessions[1]);
+  const mid = sessionAt(doc, "2026-09-05", null);
+  assert.deepEqual(mid, { date: "2026-09-05", time: null, entries: [] });
+  sessionAt(doc, "2026-09-10", "07:00");
+  assert.deepEqual(doc.sessions.map(s => s.date), ["2026-09-01", "2026-09-05", "2026-09-08", "2026-09-10"]);
+  mid.entries.push({ id: "row", sets: S("40x8") });
+  assert.doesNotThrow(() => parseLogText(toLogText(doc))); // 순서가 맞아 파서가 받는다
 });
 
 // ---------- 종목 관리 ----------
@@ -107,6 +126,19 @@ test("removeExercise: 기록 없으면 삭제, 있으면 숨김; 숨긴 종목�
   assert.equal(restoreExercise(doc, "squat"), true);
   assert.deepEqual(visibleExercises(doc).map(e => e.id), ["squat", "bench", "deadlift", "ohp", "pullup"]);
   assert.equal(restoreExercise(doc, "nope"), false);
+});
+test("renameExercise: 이름만 바뀌고 id·기록은 그대로; 빈 이름·모르는 id는 거부", () => {
+  const doc = defaultDoc("2026-09-07T20:15:33+09:00");
+  doc.sessions = [{ date: "2026-09-01", time: "18:00", entries: [{ id: "squat", sets: S("60x5") }] }];
+  assert.equal(renameExercise(doc, "squat", " 백 스쿼트 "), true);
+  assert.deepEqual(doc.exercises[0], { id: "squat", name: "백 스쿼트", hidden: false });
+  assert.equal(renameExercise(doc, "squat", "   "), false);
+  assert.equal(renameExercise(doc, "nope", "x"), false);
+  assert.equal(doc.exercises[0].name, "백 스쿼트");
+  const text = toLogText(doc);
+  assert.ok(text.includes("%% ex squat 백 스쿼트 %%\n"));
+  assert.ok(text.includes("\n2026-09-01 squat 60x5\n"));
+  assert.deepEqual(parseLogText(text), doc);
 });
 
 // ---------- 텍스트 왕복 ----------

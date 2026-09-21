@@ -40,6 +40,7 @@
   background: var(--interactive-accent); color: var(--text-on-accent); }
 .tlog-today { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 16px; margin: 4px 0 2px; }
 .tlog-today-label { margin-right: 4px; }
+.tlog-today-vol { color: var(--text-muted); margin-left: 2px; }
 .tlog-view button.tlog-setbtn { min-height: 38px; font-size: 16px; padding: 0 10px; }
 .tlog-view button.tlog-setbtn.is-selected { outline: 3px solid var(--text-accent); }
 .tlog-item.is-link { cursor: pointer; }
