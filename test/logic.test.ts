@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  localDate, localTime, daysBetween, shiftDate, weekStart, weekday, volume, fmtVol, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
+  localDate, localTime, daysBetween, shiftDate, weekStart, weekday, volume, fmtVol, modeOf, measure, fmtMeasure, fmtSet, totalReps, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
   todayBlock, sessionAt, visibleExercises, lastEntryId, toLogText, parseLogText, defaultDoc, newExercise, slugId, removeExercise, restoreExercise,
-  renameExercise, ParseError,
+  renameExercise, recommend, setStep, stepOf, DEFAULT_STEP, ParseError,
 } from "../src/logic.ts";
 import type { SetRec, Doc, HistItem } from "../src/logic.ts";
 
@@ -45,7 +45,7 @@ test("volume: kg×횟수 합(소수 둘째 자리) / fmtVol 천 단위 쉼표 / 
 test("weeklyTrend: 주별 최고 총량·최고 세트·세션 수, 최신 주부터, 기록 있는 주만", () => {
   const hist = H(["2026-09-08", "62.5x8 62.5x7"], ["2026-09-03", "60x8 60x8"], ["2026-09-01", "60x6 60x6"], ["2026-08-20", "57.5x8"]);
   const w = weeklyTrend(hist);
-  assert.deepEqual(w.map(p => [p.label, p.vol, p.best, p.sessions]), [
+  assert.deepEqual(w.map(p => [p.label, p.total, p.best, p.sessions]), [
     ["9/7~9/13", 937.5, { kg: 62.5, reps: 8 }, 1],
     ["8/31~9/6", 960, { kg: 60, reps: 8 }, 2],
     ["8/17~8/23", 460, { kg: 57.5, reps: 8 }, 1],
@@ -54,7 +54,7 @@ test("weeklyTrend: 주별 최고 총량·최고 세트·세션 수, 최신 주�
 });
 test("monthlyTrend: 월별", () => {
   const hist = H(["2026-09-08", "62.5x8"], ["2026-09-01", "60x6"], ["2026-08-20", "57.5x8"], ["2026-06-01", "50x5"]);
-  assert.deepEqual(monthlyTrend(hist).map(p => [p.label, p.vol, p.sessions]), [["2026년 9월", 500, 2], ["2026년 8월", 460, 1], ["2026년 6월", 250, 1]]);
+  assert.deepEqual(monthlyTrend(hist).map(p => [p.label, p.total, p.sessions]), [["2026년 9월", 500, 2], ["2026년 8월", 460, 1], ["2026년 6월", 250, 1]]);
 });
 test("hints: 공백·같은 총량 연속·직전 총량 변화(횟수만 늘어도 잡힘). 숫자 제안은 없음", () => {
   assert.deepEqual(hints([], null, TODAY), []);
@@ -65,6 +65,80 @@ test("hints: 공백·같은 총량 연속·직전 총량 변화(횟수만 늘어
   assert.deepEqual(hints(reps, "2026-09-05", TODAY), ["직전 총량 1,680 kg, 그 전 1,645 kg (+35 kg)"]);
   assert.deepEqual(hints(H(["2026-09-05", "55x5"], ["2026-09-03", "60x8"]), "2026-09-05", TODAY), ["직전 총량 275 kg, 그 전 480 kg (-205 kg)"]);
   for (const h of hints(streak, "2026-08-01", TODAY)) assert.ok(!/다음|목표/.test(h));
+});
+test("recommend: 실제 기록으로 — 상한 도달이면 무게 칸만큼, 아니면 가장 적은 세트 +1, 맨몸은 총 반복 +1", () => {
+  assert.equal(recommend([], "vol"), null);
+  // 랫풀다운: 12회로 시작, 지금 4세트 모두 13 → 37.5 kg, 13×35/37.5=12.1 → 12회
+  const lat = H(["2026-09-30", "35x13 35x13 35x13 35x13"], ["2026-09-21", "35x13 35x13 35x13 35x12"], ["2026-09-09", "35x12 35x12 35x12 35x12"]);
+  assert.deepEqual(recommend(lat, "vol"), { label: "추천 37.5 kg × 12회", why: "지난번 4세트 모두 12회 이상이라 한 칸(+2.5 kg) 올림" });
+  // 5 kg 칸 기계: 40 kg, 13×35/40=11.4 → 11회
+  assert.deepEqual(recommend(lat, "vol", 5), { label: "추천 40 kg × 11회", why: "지난번 4세트 모두 12회 이상이라 한 칸(+5 kg) 올림" });
+  // 체스트프레스: 12 12 12 11 → 같은 무게 12회
+  const chest = H(["2026-09-27", "30x12 30x12 30x12 30x11"], ["2026-09-11", "30x12 30x12 30x11 30x11"]);
+  assert.deepEqual(recommend(chest, "vol"), { label: "추천 30 kg × 12회", why: "모든 세트 12회까지 · 전부 12회가 되면 한 칸 올림" });
+  // 덤벨사이드: 20회로 시작해 상한 20, 4→5 kg로 올린 뒤 15~18 → 5 kg 16회
+  const dside = H(["2026-09-28", "5x15 5x18 5x17 5x17"], ["2026-09-21", "4x21 4x20 4x20 4x20"], ["2026-09-11", "4x20 4x20 4x20 4x20"]);
+  assert.deepEqual(recommend(dside, "vol"), { label: "추천 5 kg × 16회", why: "모든 세트 16회까지 · 전부 20회가 되면 한 칸 올림" });
+  // 상한에 닿으면 정한 칸(덤벨 1 kg)만큼: 20×5/6=16.7 → 16
+  const dsideTop = H(["2026-10-05", "5x20 5x20 5x20 5x20"], ...dside.slice(1).map(h => [h.date, h.sets.map(s => `${s.kg}x${s.reps}`).join(" ")] as [string, string]));
+  assert.equal(recommend(dsideTop, "vol", 1)!.label, "추천 6 kg × 16회");
+  // 사이드레터럴레이즈머신: 3세트만 했어도 모두 20 이상 → 기본 칸 2.5 kg, 24×5/7.5=16
+  const smach = H(["2026-09-30", "5x25 5x25 5x22"], ["2026-09-09", "5x20 5x20 5x20 5x20"]);
+  assert.deepEqual(recommend(smach, "vol"), { label: "추천 7.5 kg × 16회", why: "지난번 3세트 모두 20회 이상이라 한 칸(+2.5 kg) 올림" });
+  // 워밍업(가벼운 세트)은 빼고 판정
+  assert.equal(recommend(H(["2026-10-01", "60x5 80x12 80x12 80x12"], ["2026-09-01", "80x10"]), "vol")!.label, "추천 82.5 kg × 11회");
+  // 맨몸: 총 반복 +1 (예전 2.5 kg 기록이어도 반복만 봄)
+  assert.deepEqual(recommend(H(["2026-09-27", "2.5x6 2.5x5 2.5x4 2.5x3"]), "reps"), { label: "추천 맨몸 · 총 19회", why: "지난번 총 18회보다 1회 더" });
+  assert.equal(recommend(H(["2026-10-01", "0x7 0x6"]), "vol")!.label, "추천 맨몸 · 총 14회");
+  for (const r of [lat, chest, dside, smach].map(h => recommend(h, "vol")!)) assert.ok(!/다음엔|목표/.test(r.label + r.why));
+});
+test("무게 칸: setStep·stepOf, 기본값이면 줄 없음, step 줄 왕복(종목 줄 바로 뒤)", () => {
+  const doc = defaultDoc("2026-10-01T10:00:00+09:00");
+  assert.equal(stepOf(doc.exercises[0]), DEFAULT_STEP);
+  assert.equal(setStep(doc, "squat", 5), true);
+  assert.equal(setStep(doc, "bench", 1), true);
+  assert.equal(setStep(doc, "nope", 5), false);
+  assert.equal(setStep(doc, "squat", 0), false);
+  assert.equal(stepOf(doc.exercises[0]), 5);
+  doc.exercises[1].hidden = true;
+  doc.sessions = [{ date: "2026-10-01", time: "18:00", entries: [{ id: "bench", sets: S("40x8") }] }];
+  const text = toLogText(doc);
+  assert.ok(text.includes("\n%% ex squat 스쿼트 %%\n%% step squat 5 %%\n%% hidden bench 벤치 %%\n%% step bench 1 %%\n%% ex row 바벨로우 %%\n"));
+  assert.deepEqual(parseLogText(text), doc);
+  assert.equal(setStep(doc, "squat", DEFAULT_STEP), true);
+  assert.ok(!("step" in doc.exercises[0]) && !toLogText(doc).includes("step squat"));
+  // 이름을 바꿔도 칸은 유지
+  setStep(doc, "row", 5); renameExercise(doc, "row", "바벨 로우");
+  assert.deepEqual(parseLogText(toLogText(doc)).exercises.find(e => e.id === "row"), { id: "row", name: "바벨 로우", hidden: false, step: 5 });
+});
+test("거부: step 줄 — 모르는 id, 형식, 양수 아님, 기록 뒤", () => {
+  rejects(HEAD + "%% step bench 5 %%\n", 3, /step 줄 형식/);
+  rejects(HEAD + "%% step squat %%\n", 3, /step 줄 형식/);
+  rejects(HEAD + "%% step squat 0 %%\n", 3, /양수가 아님/);
+  rejects(HEAD + "%% step squat abc %%\n", 3, /양수가 아님/);
+  rejects(HEAD + "2026-09-07 session\n%% step squat 5 %%\n", 4, /기록보다 앞/);
+  assert.equal(parseLogText(HEAD + "%% step squat 2.5 %%\n").exercises[0].step, 2.5);
+});
+test("맨몸(무게 0): 최근 세션이 모두 0 kg이면 총 반복으로 비교, 표시는 8회", () => {
+  assert.equal(fmtSet({ kg: 0, reps: 8 }), "8회");
+  assert.equal(fmtSet({ kg: 27.5, reps: 12 }), "27.5×12");
+  assert.equal(totalReps(S("0x6 0x5 0x4 0x3")), 18);
+  assert.equal(modeOf([]), "vol");
+  assert.equal(modeOf(H(["2026-09-27", "2.5x6 2.5x5"])), "vol");
+  // 가짜로 넣은 2.5 kg 기록 뒤에 맨몸으로 바꾼 실제 풀업 기록
+  const pull = H(["2026-10-01", "0x7 0x6 0x5 0x4"], ["2026-09-27", "2.5x6 2.5x5 2.5x4 2.5x3"], ["2026-09-22", "2.5x5 2.5x5 2.5x4 2.5x3"]);
+  assert.equal(modeOf(pull), "reps");
+  assert.equal(measure(pull[1].sets, "reps"), 18);
+  assert.equal(measure(pull[1].sets, "vol"), 45);
+  assert.equal(fmtMeasure(22, "reps"), "22회");
+  assert.equal(fmtMeasure(1680, "vol"), "1,680 kg");
+  assert.deepEqual(hints(pull, "2026-10-01", "2026-10-03"), ["직전 총 22회, 그 전 18회 (+4회)"]);
+  const same = H(["2026-09-30", "0x5 0x5"], ["2026-09-28", "0x6 0x4"], ["2026-09-26", "0x5 0x5"]);
+  assert.deepEqual(hints(same, "2026-09-30", "2026-10-01"), ["총 10회로 3세션 연속 (9/26부터)"]);
+  assert.deepEqual(weeklyTrend(pull).map(p => [p.label, p.total, p.sessions]), [["9/28~10/4", 22, 1], ["9/21~9/27", 18, 2]]);
+  // 무게를 지정하면 그 기준으로(기록 화면은 오늘 포함 기록으로 정한 기준을 넘긴다)
+  assert.deepEqual(hints(pull.slice(1), "2026-09-27", "2026-10-01", "reps"), ["직전 총 18회, 그 전 17회 (+1회)"]);
+  assert.deepEqual(hints(pull.slice(1), "2026-09-27", "2026-10-01"), ["직전 총량 45 kg, 그 전 42.5 kg (+2.5 kg)"]);
 });
 
 // ---------- 오늘 ----------

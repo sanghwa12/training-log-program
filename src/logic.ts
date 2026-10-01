@@ -8,17 +8,20 @@ export const FORMAT = "tlog v4";
 export const LOG_PATH = "tlog.md";
 export const GAP_DAYS = 14;     // 이 일수 이상 쉬었으면 알려 준다(정보)
 export const SAME_STREAK = 3;   // 같은 최고 무게가 이만큼 이어지면 알려 준다(정보)
+export const REP_TOP_MIN = 12;  // 추천: 모든 세트가 이 반복(또는 첫 기록의 최고 반복 중 큰 쪽)에 닿으면 중량 한 칸
+export const DEFAULT_STEP = 2.5; // 무게 칸을 정하지 않은 종목의 −/+ 와 추천 단위
 
 /** 종목. 템플릿(A/B) 구분은 없다 — 오늘 할 종목은 사용자가 그때그때 고른다. hidden이면 목록에서만 뺀다(기록은 유지). */
-export type Exercise = { id: string; name: string; hidden: boolean };
+/** step = 그 기계의 무게 칸(kg). 없으면 DEFAULT_STEP. 파일에는 `%% step id kg %%` 줄로. */
+export type Exercise = { id: string; name: string; hidden: boolean; step?: number };
 export type SetRec = { kg: number; reps: number };
 export type Entry = { id: string; sets: SetRec[] };
 /** 하루 = 세션 하나. time은 첫 세트를 찍은 시각. */
 export type Session = { date: string; time: string | null; entries: Entry[] };
 export type Doc = { writtenAt: string; exercises: Exercise[]; sessions: Session[] };
 export type HistItem = { date: string; sets: SetRec[] };
-/** 기간 요약. vol = 그 기간 세션 총량(kg×횟수 합)의 최고. */
-export type Period = { key: string; label: string; vol: number; best: SetRec; sessions: number };
+/** 기간 요약. total = 그 기간 세션 합계(총량 kg 또는 맨몸이면 총 반복)의 최고. */
+export type Period = { key: string; label: string; total: number; best: SetRec; sessions: number };
 
 export class ParseError extends Error {
   line: number;
@@ -97,6 +100,52 @@ export const volume = (sets: SetRec[]): number => round2(sets.reduce((v, s) => v
 /** 1680 → "1,680". */
 export const fmtVol = (v: number): string => round2(v).toLocaleString("en-US");
 
+/** 진행 기준. vol = 총량(kg×횟수 합), reps = 총 반복(맨몸 종목). */
+export type Mode = "vol" | "reps";
+export const totalReps = (sets: SetRec[]): number => sets.reduce((n, s) => n + s.reps, 0);
+/** 맨몸 = 무게 0. 가장 최근 세션이 모두 0 kg이면 그 종목은 총 반복으로 본다(지난 기록에 다른 무게가 섞여 있어도 반복끼리 비교). */
+export const modeOf = (hist: HistItem[]): Mode => (hist.length && hist[0].sets.every(s => s.kg === 0) ? "reps" : "vol");
+export const measure = (sets: SetRec[], mode: Mode): number => (mode === "reps" ? totalReps(sets) : volume(sets));
+export const fmtMeasure = (v: number, mode: Mode): string => (mode === "reps" ? `${v}회` : `${fmtVol(v)} kg`);
+/** 세트 하나: 60×8, 맨몸이면 8회. */
+export const fmtSet = (s: SetRec): string => (s.kg === 0 ? `${s.reps}회` : `${s.kg}×${s.reps}`);
+
+// ---------- 추천(정보) ----------
+
+/** 기록 화면에 보여 줄 추천 한 줄과 그 근거. 미리 채움 값은 바꾸지 않는다 — 무엇을 들지는 사용자가 정한다. */
+export type Rec = { label: string; why: string };
+
+/** 이 종목의 무게 한 칸. −/+ 버튼과 추천이 같이 쓴다. */
+export const stepOf = (ex: Exercise): number => ex.step ?? DEFAULT_STEP;
+
+/**
+ * 지난 기록(최신 우선, 오늘 제외)으로 다음 세트 추천. 사용자가 해 온 방식(같은 중량에서 반복 늘리기)에 상한을 둔 더블 프로그레션.
+ *  - 상한 = 이 종목 첫 기록의 최고 반복과 REP_TOP_MIN 중 큰 값(레터럴처럼 20회로 시작했으면 20)
+ *  - 직전 세션의 작업 세트(최고 무게 세트) 모두 상한 이상 → 한 칸(step) 올리고, 반복은 세트 총량이 줄지 않을 만큼(내림)
+ *  - 아니면 같은 무게, 가장 적었던 세트 +1회
+ *  - 맨몸(reps 기준이거나 무게 0)은 직전 총 반복 +1
+ */
+export function recommend(hist: HistItem[], mode: Mode, step: number = DEFAULT_STEP): Rec | null {
+  if (!hist.length) return null;
+  const last = hist[0].sets;
+  const W = Math.max(...last.map(s => s.kg));
+  if (mode === "reps" || W === 0) {
+    const t = totalReps(last);
+    return { label: `추천 맨몸 · 총 ${t + 1}회`, why: `지난번 총 ${t}회보다 1회 더` };
+  }
+  const work = last.filter(s => s.kg === W).map(s => s.reps);
+  const top = Math.max(REP_TOP_MIN, ...hist[hist.length - 1].sets.map(s => s.reps));
+  const min = Math.min(...work);
+  if (min >= top) {
+    const kg = round2(W + step);
+    const avg = work.reduce((a, b) => a + b, 0) / work.length;
+    const reps = Math.max(1, Math.min(top, Math.floor((avg * W) / kg)));
+    return { label: `추천 ${kg} kg × ${reps}회`, why: `지난번 ${work.length}세트 모두 ${top}회 이상이라 한 칸(+${step} kg) 올림` };
+  }
+  const reps = Math.min(top, min + 1);
+  return { label: `추천 ${W} kg × ${reps}회`, why: `모든 세트 ${reps}회까지 · 전부 ${top}회가 되면 한 칸 올림` };
+}
+
 /** 최고 세트: 무게가 높은 것, 같으면 횟수가 많은 것. */
 export function bestSet(sets: SetRec[]): SetRec | null {
   let best: SetRec | null = null;
@@ -114,18 +163,18 @@ export function historyOf(sessions: Session[], id: string): HistItem[] {
   return out;
 }
 
-function summarize(hist: HistItem[], keyOf: (d: string) => string, labelOf: (d: string) => string, limit: number): Period[] {
+function summarize(hist: HistItem[], keyOf: (d: string) => string, labelOf: (d: string) => string, limit: number, mode: Mode): Period[] {
   const out: Period[] = [];
   for (const h of hist) {
     const key = keyOf(h.date);
     let p = out.length && out[out.length - 1].key === key ? out[out.length - 1] : null;
     if (!p) {
       if (out.length >= limit) break;
-      p = { key, label: labelOf(h.date), vol: 0, best: { kg: 0, reps: 0 }, sessions: 0 };
+      p = { key, label: labelOf(h.date), total: 0, best: { kg: 0, reps: 0 }, sessions: 0 };
       out.push(p);
     }
     p.sessions++;
-    p.vol = Math.max(p.vol, volume(h.sets));
+    p.total = Math.max(p.total, measure(h.sets, mode));
     const b = bestSet(h.sets);
     if (b && (b.kg > p.best.kg || (b.kg === p.best.kg && b.reps > p.best.reps))) p.best = b;
   }
@@ -133,37 +182,39 @@ function summarize(hist: HistItem[], keyOf: (d: string) => string, labelOf: (d: 
 }
 
 /** 주간 최고(월~일), 최신 주부터 limit개. 기록이 있는 주만. */
-export function weeklyTrend(hist: HistItem[], limit: number = 8): Period[] {
-  return summarize(hist, weekStart, d => `${fmtShort(weekStart(d))}~${fmtShort(shiftDate(weekStart(d), 6))}`, limit);
+export function weeklyTrend(hist: HistItem[], limit: number = 8, mode: Mode = modeOf(hist)): Period[] {
+  return summarize(hist, weekStart, d => `${fmtShort(weekStart(d))}~${fmtShort(shiftDate(weekStart(d), 6))}`, limit, mode);
 }
 
 /** 월간 최고, 최신 달부터 limit개. 기록이 있는 달만. */
-export function monthlyTrend(hist: HistItem[], limit: number = 6): Period[] {
-  return summarize(hist, monthKey, d => `${d.slice(0, 4)}년 ${Number(d.slice(5, 7))}월`, limit);
+export function monthlyTrend(hist: HistItem[], limit: number = 6, mode: Mode = modeOf(hist)): Period[] {
+  return summarize(hist, monthKey, d => `${d.slice(0, 4)}년 ${Number(d.slice(5, 7))}월`, limit, mode);
 }
 
 /**
- * 정보성 힌트. 숫자를 제안하지 않고 사실만 말한다. 기준은 세션 총량(kg×횟수 합).
+ * 정보성 힌트. 숫자를 제안하지 않고 사실만 말한다. 기준은 세션 총량(kg×횟수 합), 맨몸 종목은 총 반복.
  *  - 마지막 세션이 GAP_DAYS 이상 전
- *  - 같은 총량이 SAME_STREAK 세션 이상 이어짐
- *  - 직전 세션과 그 전 세션의 총량이 다름(변화량)
+ *  - 같은 합계가 SAME_STREAK 세션 이상 이어짐
+ *  - 직전 세션과 그 전 세션의 합계가 다름(변화량)
  */
-export function hints(hist: HistItem[], lastSessionDate: string | null, today: string): string[] {
+export function hints(hist: HistItem[], lastSessionDate: string | null, today: string, mode: Mode = modeOf(hist)): string[] {
   const out: string[] = [];
   if (lastSessionDate) {
     const n = daysBetween(lastSessionDate, today);
     if (n >= GAP_DAYS) out.push(`${n}일 만의 운동`);
   }
   if (hist.length) {
-    const W = volume(hist[0].sets);
+    const name = mode === "reps" ? "총" : "총량";
+    const f = (v: number): string => fmtMeasure(v, mode);
+    const W = measure(hist[0].sets, mode);
     let n = 0;
-    for (const h of hist) { if (volume(h.sets) === W) n++; else break; }
-    if (n >= SAME_STREAK) out.push(`총량 ${fmtVol(W)} kg로 ${n}세션 연속 (${fmtShort(hist[n - 1].date)}부터)`);
+    for (const h of hist) { if (measure(h.sets, mode) === W) n++; else break; }
+    if (n >= SAME_STREAK) out.push(`${name} ${f(W)}로 ${n}세션 연속 (${fmtShort(hist[n - 1].date)}부터)`);
     if (hist.length >= 2) {
-      const P = volume(hist[1].sets);
+      const P = measure(hist[1].sets, mode);
       if (P !== W) {
         const d = round2(W - P);
-        out.push(`직전 총량 ${fmtVol(W)} kg, 그 전 ${fmtVol(P)} kg (${d > 0 ? "+" : "-"}${fmtVol(Math.abs(d))} kg)`);
+        out.push(`직전 ${name} ${f(W)}, 그 전 ${f(P)} (${d > 0 ? "+" : "-"}${f(Math.abs(d))})`);
       }
     }
   }
@@ -239,6 +290,14 @@ export function restoreExercise(doc: Doc, id: string): boolean {
   return true;
 }
 
+/** 무게 칸을 정한다. 기본값(DEFAULT_STEP)이면 줄을 지운다. 0 이하·모르는 id는 false. */
+export function setStep(doc: Doc, id: string, kg: number): boolean {
+  const ex = doc.exercises.find(e => e.id === id);
+  if (!ex || !(kg > 0)) return false;
+  if (kg === DEFAULT_STEP) delete ex.step; else ex.step = round2(kg);
+  return true;
+}
+
 /** 표시 이름만 바꾼다. id는 기록 줄의 열쇠이므로 그대로 둔다. 빈 이름이면 false. */
 export function renameExercise(doc: Doc, id: string, name: string): boolean {
   const ex = doc.exercises.find(e => e.id === id);
@@ -261,7 +320,10 @@ const fmtKg = (x: number): string => String(round2(x));
  */
 export function toLogText(doc: Doc): string {
   const lines: string[] = [`%% ${FORMAT} ${doc.writtenAt} %%`];
-  for (const e of doc.exercises) lines.push(`%% ${e.hidden ? "hidden" : "ex"} ${e.id} ${e.name} %%`);
+  for (const e of doc.exercises) {
+    lines.push(`%% ${e.hidden ? "hidden" : "ex"} ${e.id} ${e.name} %%`);
+    if (e.step != null) lines.push(`%% step ${e.id} ${fmtKg(e.step)} %%`);
+  }
   for (const s of doc.sessions) {
     lines.push(`${s.date} session${s.time ? " " + s.time : ""}`);
     for (const en of s.entries) {
@@ -300,8 +362,17 @@ export function parseLogText(text: string): Doc {
       if (line.length < 4 || !line.endsWith("%%")) throw new ParseError(ln, "닫는 %% 가 없음");
       const body = line.slice(2, -2).trim();
       const kw = body.split(/\s+/)[0];
-      if (kw !== "ex" && kw !== "hidden") continue; // 그 밖의 주석은 무시
+      if (kw !== "ex" && kw !== "hidden" && kw !== "step") continue; // 그 밖의 주석은 무시
       const t = body.split(/\s+/);
+      if (kw === "step") { // %% step id kg %% — 그 종목 줄 뒤, 기록 앞
+        if (cur) throw new ParseError(ln, "step 줄은 기록보다 앞에 있어야 함");
+        const ex = doc.exercises.find(e => e.id === t[1]);
+        if (t.length !== 3 || !ex) throw new ParseError(ln, "step 줄 형식: step id 무게칸 (그 종목 줄 뒤에)");
+        const v = Number(t[2]);
+        if (!Number.isFinite(v) || v <= 0) throw new ParseError(ln, `무게 칸이 양수가 아님: ${t[2]}`);
+        ex.step = v;
+        continue;
+      }
       if (cur) throw new ParseError(ln, "ex 줄은 기록보다 앞에 있어야 함");
       if (t.length < nameFrom + 1) throw new ParseError(ln, legacy ? `v${version} ex 줄 형식이 아님` : "ex 줄 형식: ex id 이름");
       const id = t[1];

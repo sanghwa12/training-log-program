@@ -28,6 +28,7 @@
 .tlog-head { display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; }
 .tlog-exname { font-size: 26px; font-weight: 700; }
 .tlog-last { font-size: 17px; margin: 6px 0 2px; }
+.tlog-rec { font-size: 17px; font-weight: 600; color: var(--text-accent); margin: 6px 0 0; }
 
 .tlog-stepper { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
 .tlog-stepper-label { width: 40px; font-size: 15px; color: var(--text-muted); }

@@ -5,14 +5,14 @@ import { ItemView, Notice } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 import type TlogPlugin from "./main.ts";
 import {
-  LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, volume, fmtVol, historyOf, hints, weeklyTrend, monthlyTrend,
-  todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, ParseError,
+  LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, modeOf, measure, fmtMeasure, fmtSet, recommend, historyOf, hints, weeklyTrend, monthlyTrend,
+  todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, ParseError,
 } from "./logic.ts";
-import type { Doc, Exercise, Session, SetRec, HistItem } from "./logic.ts";
+import type { Doc, Exercise, Session, SetRec, HistItem, Mode } from "./logic.ts";
 import { readDoc, updateDoc, logFile } from "./store.ts";
 
 export const VIEW_TYPE = "tlog-view";
-const STEP_KG = 2.5;         // 무게 ± 단위
+const STEP_CHOICES = [1, 2, 2.5, 5]; // 더보기 → 무게 칸에서 고를 수 있는 값(kg)
 const REPEAT_DELAY = 300;    // 길게 누르기 시작(ms)
 const REPEAT_EVERY = 200;    // 반복 간격(ms) = 초당 5회
 const REPEAT_MAX = 40;       // 한 번 누름당 최대 반복
@@ -25,8 +25,11 @@ type Field = "kg" | "reps";
 
 const round2 = (x: number): number => Math.round(x * 100) / 100;
 const fmtWhen = (iso: string): string => (iso.length >= 16 ? `${fmtShort(iso)} ${iso.slice(11, 16)}` : iso);
-const fmtSets = (sets: SetRec[]): string => sets.map(s => `${s.kg}×${s.reps}`).join("  ");
-const fmtSetsVol = (sets: SetRec[]): string => `${fmtSets(sets)} = ${fmtVol(volume(sets))} kg`;
+const fmtSets = (sets: SetRec[]): string => sets.map(fmtSet).join("  ");
+/** 세트 목록 = 그 종목의 기준 합계(총량 kg, 맨몸이면 총 반복). */
+const fmtSetsTotal = (sets: SetRec[], mode: Mode): string => `${fmtSets(sets)} = ${fmtMeasure(measure(sets, mode), mode)}`;
+/** 무게 칸·기록 버튼의 무게. 0은 맨몸. */
+const kgText = (kg: number | null): string => (kg === 0 ? "맨몸" : `${kg} kg`);
 const fmtDay = (date: string): string => `${fmtShort(date)} (${weekday(date)})`;
 
 /** 그 날짜보다 앞선 기록. 힌트·"지난번"·미리 채움은 이것만 본다(지난 날짜를 고칠 때는 그 날짜 기준). */
@@ -186,9 +189,10 @@ export class TlogView extends ItemView {
     for (const ex of list) {
       const todaySets = block?.entries.find(e => e.id === ex.id)?.sets ?? [];
       const last = histOf(ex.id)[0];
+      const mode = modeOf(historyOf(doc.sessions, ex.id));
       const row = listEl.createDiv({ cls: this.error ? "tlog-item" : "tlog-item is-link" });
       row.createDiv({ cls: "tlog-item-main", text: `${ex.name} ›` });
-      row.createDiv({ cls: "tlog-sub", text: todaySets.length ? `오늘: ${fmtSetsVol(todaySets)}` : last ? `지난번 ${fmtShort(last.date)}: ${fmtSetsVol(last.sets)}` : "기록 없음" });
+      row.createDiv({ cls: "tlog-sub", text: todaySets.length ? `오늘: ${fmtSetsTotal(todaySets, mode)}` : last ? `지난번 ${fmtShort(last.date)}: ${fmtSetsTotal(last.sets, mode)}` : "기록 없음" });
       if (!this.error) row.onclick = () => this.enterLog(ex.id);
     }
 
@@ -267,6 +271,7 @@ export class TlogView extends ItemView {
     const sets = block?.entries.find(e => e.id === ex.id)?.sets ?? [];
     const hist = histOf(ex.id);                       // 그 날짜 이전만: 힌트·지난번·미리 채움용
     const allHist = historyOf(doc.sessions, ex.id);    // 오늘 포함: 기록 보기용
+    const mode = modeOf(allHist);                     // 가장 최근 세션이 맨몸이면 총 반복 기준
     const last = hist[0] ?? null;
     if (this.editSet != null && this.editSet >= sets.length) this.editSet = null; // 수정 중이던 세트가 사라짐
     if (this.editSet == null && (this.valFor !== ex.id || this.kg == null || this.reps == null)) {
@@ -287,15 +292,23 @@ export class TlogView extends ItemView {
     const head = el.createDiv({ cls: "tlog-head" });
     head.createDiv({ cls: "tlog-exname", text: ex.name });
     head.createDiv({ cls: "tlog-sub", text: idx >= 0 ? `${idx + 1}/${list.length}` : "" });
-    el.createDiv({ cls: "tlog-last", text: last ? `지난번 ${fmtShort(last.date)}: ${fmtSetsVol(last.sets)}` : "첫 기록" });
-    if (!editingPast) for (const h of hints(hist, lastDate, today)) el.createDiv({ cls: "tlog-hint", text: h });
+    el.createDiv({ cls: "tlog-last", text: last ? `지난번 ${fmtShort(last.date)}: ${fmtSetsTotal(last.sets, mode)}` : "첫 기록" });
+    const step = stepOf(ex); // 이 기계의 무게 칸: −/+ 와 추천이 같이 쓴다
+    if (!editingPast) {
+      const rec = recommend(hist, mode, step); // 정보만: 미리 채운 값은 그대로 지난번 기록
+      if (rec) {
+        el.createDiv({ cls: "tlog-rec", text: rec.label });
+        el.createDiv({ cls: "tlog-note", text: rec.why });
+      }
+      for (const h of hints(hist, lastDate, today, mode)) el.createDiv({ cls: "tlog-hint", text: h });
+    }
 
     // 무게·횟수 −/+ (숫자를 누르면 직접 입력), 그리고 기록 버튼. 세트를 수정 중이면 "n세트 수정"이 된다.
-    this.renderStepper(el, "무게", "kg");
-    this.renderStepper(el, "횟수", "reps");
+    this.renderStepper(el, "무게", "kg", step);
+    this.renderStepper(el, "횟수", "reps", 1);
     const editIdx = this.editSet;
     this.recLabel = editIdx != null ? `${editIdx + 1}세트 수정` : "기록";
-    const rec = el.createEl("button", { cls: "tlog-main", text: `${this.recLabel}   ${this.kg} kg × ${this.reps}회` });
+    const rec = el.createEl("button", { cls: "tlog-main", text: `${this.recLabel}   ${kgText(this.kg)} × ${this.reps}회` });
     rec.disabled = this.busy || this.editing !== null;
     rec.onclick = () => void (editIdx != null ? this.updateSet(editIdx) : this.logSet());
     this.recEl = rec;
@@ -313,7 +326,7 @@ export class TlogView extends ItemView {
     const todayRow = el.createDiv({ cls: "tlog-today" });
     todayRow.createSpan({ cls: "tlog-today-label", text: sets.length ? `${dayWord} ${sets.length}세트:` : editingPast ? "이 날 기록 없음" : "오늘 아직 없음" });
     sets.forEach((s, i) => {
-      const b = todayRow.createEl("button", { cls: "tlog-setbtn", text: `${s.kg}×${s.reps}` });
+      const b = todayRow.createEl("button", { cls: "tlog-setbtn", text: fmtSet(s) });
       if (i === editIdx) b.addClass("is-selected");
       b.disabled = this.busy;
       b.onclick = () => {
@@ -322,7 +335,7 @@ export class TlogView extends ItemView {
         this.render();
       };
     });
-    if (sets.length) todayRow.createSpan({ cls: "tlog-today-vol", text: `= ${fmtVol(volume(sets))} kg` });
+    if (sets.length) todayRow.createSpan({ cls: "tlog-today-vol", text: `= ${fmtMeasure(measure(sets, mode), mode)}` });
     if (sets.length && editIdx == null) el.createDiv({ cls: "tlog-note", text: "세트를 누르면 고치거나 지울 수 있습니다" });
 
     // 이동: 목록으로, 또는 목록 순서상 다음 종목으로
@@ -356,6 +369,15 @@ export class TlogView extends ItemView {
         nameIn.onkeydown = (e: KeyboardEvent) => { if (e.key === "Enter") void this.renameExercise(ex.id, nameIn.value); };
         window.setTimeout(() => nameIn.focus(), 0);
       }
+      // 무게 칸: 이 기계가 몇 kg씩 올라가는지. 누르면 바로 저장되고 −/+ 와 추천이 따라간다.
+      const stepRow = menu.createDiv({ cls: "tlog-today" });
+      stepRow.createSpan({ cls: "tlog-today-label", text: "무게 칸" });
+      for (const v of STEP_CHOICES) {
+        const b = stepRow.createEl("button", { cls: "tlog-setbtn", text: `${v} kg` });
+        if (v === step) b.addClass("is-selected");
+        b.disabled = this.busy;
+        b.onclick = () => void this.setStep(ex.id, v);
+      }
       const syncBtn = menu.createEl("button", { text: "동기화" });
       syncBtn.onclick = () => { this.plugin.sync(); };
       const delBtn = menu.createEl("button", { cls: "tlog-danger", text: this.confirmDelete ? "정말 삭제? (다시 누르면 삭제)" : `"${ex.name}" 삭제` });
@@ -374,12 +396,11 @@ export class TlogView extends ItemView {
     }
   }
 
-  /** 한 줄: 라벨 [−] 값 [+]. 값을 누르면 입력칸으로 바뀐다. */
-  private renderStepper(el: HTMLElement, label: string, field: Field): void {
+  /** 한 줄: 라벨 [−] 값 [+]. 값을 누르면 입력칸으로 바뀐다. step = 한 번 누를 때 바뀌는 양. */
+  private renderStepper(el: HTMLElement, label: string, field: Field, step: number): void {
     const row = el.createDiv({ cls: "tlog-stepper" });
     row.createSpan({ cls: "tlog-stepper-label", text: label });
     const minus = row.createEl("button", { cls: "tlog-step", text: "−" });
-    const unit = field === "kg" ? " kg" : "회";
     if (this.editing === field) {
       const inp = row.createEl("input", { cls: "tlog-valinput", type: "text" });
       inp.inputMode = field === "kg" ? "decimal" : "numeric";
@@ -404,27 +425,29 @@ export class TlogView extends ItemView {
       inp.onblur = apply;
       window.setTimeout(() => inp.focus(), 0);
     } else {
-      const valBtn = row.createEl("button", { cls: "tlog-value", text: `${this[field]}${unit}` });
+      const valBtn = row.createEl("button", { cls: "tlog-value", text: field === "kg" ? kgText(this.kg) : `${this.reps}회` });
       valBtn.onclick = () => { this.editing = field; this.render(); };
       this.valueEl[field] = valBtn;
     }
     const plus = row.createEl("button", { cls: "tlog-step", text: "+" });
-    this.bindRepeat(minus, field, -1);
-    this.bindRepeat(plus, field, 1);
+    this.bindRepeat(minus, field, -step);
+    this.bindRepeat(plus, field, step);
   }
 
   private renderHistory(el: HTMLElement, hist: HistItem[]): void {
     const box = el.createDiv({ cls: "tlog-hist" });
     if (!hist.length) { box.createDiv({ cls: "tlog-note", text: "아직 기록이 없습니다" }); return; }
-    box.createDiv({ cls: "tlog-hist-title", text: "날짜별 (세트 = 총량)" });
-    for (const h of hist.slice(0, HISTORY_ROWS)) box.createDiv({ cls: "tlog-hist-row", text: `${h.date}  ${fmtSetsVol(h.sets)}` });
+    const mode = modeOf(hist);
+    const word = mode === "reps" ? "총 반복" : "총량";
+    box.createDiv({ cls: "tlog-hist-title", text: `날짜별 (세트 = ${word})` });
+    for (const h of hist.slice(0, HISTORY_ROWS)) box.createDiv({ cls: "tlog-hist-row", text: `${h.date}  ${fmtSetsTotal(h.sets, mode)}` });
     if (hist.length > HISTORY_ROWS) box.createDiv({ cls: "tlog-note", text: `… 이전 ${hist.length - HISTORY_ROWS}회는 tlog.md에` });
-    const period = (p: { label: string; vol: number; best: SetRec; sessions: number }) =>
-      `${p.label}  ${fmtVol(p.vol)} kg  (최고 세트 ${p.best.kg}×${p.best.reps}, ${p.sessions}회)`;
-    box.createDiv({ cls: "tlog-hist-title", text: "주간 최고 총량" });
-    for (const p of weeklyTrend(hist)) box.createDiv({ cls: "tlog-hist-row", text: period(p) });
-    box.createDiv({ cls: "tlog-hist-title", text: "월간 최고 총량" });
-    for (const p of monthlyTrend(hist)) box.createDiv({ cls: "tlog-hist-row", text: period(p) });
+    const period = (p: { label: string; total: number; best: SetRec; sessions: number }) =>
+      `${p.label}  ${fmtMeasure(p.total, mode)}  (최고 세트 ${fmtSet(p.best)}, ${p.sessions}세션)`;
+    box.createDiv({ cls: "tlog-hist-title", text: `주간 최고 ${word}` });
+    for (const p of weeklyTrend(hist, 8, mode)) box.createDiv({ cls: "tlog-hist-row", text: period(p) });
+    box.createDiv({ cls: "tlog-hist-title", text: `월간 최고 ${word}` });
+    for (const p of monthlyTrend(hist, 6, mode)) box.createDiv({ cls: "tlog-hist-row", text: period(p) });
   }
 
   // ---------- 쓰기 ----------
@@ -584,15 +607,31 @@ export class TlogView extends ItemView {
     await this.load();
   }
 
+  /** 종목의 무게 칸을 저장한다. 더보기는 열어 둔 채로(선택이 바뀐 걸 바로 보이게). */
+  private async setStep(id: string, kg: number): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    this.render();
+    try {
+      await updateDoc(this.app, (doc) => { if (!setStep(doc, id, kg)) throw new Error("그 종목이 이미 없습니다"); });
+      this.plugin.lastWriteAt = Date.now();
+    } catch (e) {
+      new Notice(e instanceof ParseError ? `${LOG_PATH} ${e.message}` : `무게 칸 저장 실패: ${String(e)}`);
+    }
+    this.busy = false;
+    await this.load();
+  }
+
   /** 더보기 → 지난 기록 고치기: 최근 세션 날짜 목록. 누르면 그 날짜의 기록 화면이 된다. */
   private renderDatePicker(el: HTMLElement, doc: Doc, ex: Exercise, today: string): void {
     const box = el.createDiv({ cls: "tlog-add" });
     const past = doc.sessions.filter(s => s.date !== today).slice(-PICK_DATES).reverse();
+    const mode = modeOf(historyOf(doc.sessions, ex.id));
     if (!past.length) { box.createDiv({ cls: "tlog-note", text: "지난 날짜가 없습니다" }); return; }
     box.createDiv({ cls: "tlog-note", text: "날짜를 누르면 그 날짜의 기록 화면이 열립니다. 거기서 세트를 추가·수정·삭제하면 그 날짜로 저장됩니다." });
     for (const s of past) {
       const sets = s.entries.find(e => e.id === ex.id)?.sets ?? [];
-      const b = box.createEl("button", { cls: "tlog-pick", text: `${fmtDay(s.date)}  ${sets.length ? fmtSetsVol(sets) : "이 종목 없음"}` });
+      const b = box.createEl("button", { cls: "tlog-pick", text: `${fmtDay(s.date)}  ${sets.length ? fmtSetsTotal(sets, mode) : "이 종목 없음"}` });
       b.disabled = this.busy;
       b.onclick = () => { this.editDate = s.date; this.valFor = ""; this.resetPanels(); this.render(); };
     }
@@ -600,13 +639,14 @@ export class TlogView extends ItemView {
 
   // ---------- −/+ 길게 누르기 ----------
 
-  private bindRepeat(btn: HTMLElement, field: Field, dir: 1 | -1): void {
+  /** delta = 한 번에 더할 양(무게는 그 종목의 칸, 횟수는 ±1). */
+  private bindRepeat(btn: HTMLElement, field: Field, delta: number): void {
     const step = () => {
-      if (field === "kg") this.kg = Math.max(0, round2((this.kg ?? 0) + dir * STEP_KG));
-      else this.reps = Math.max(1, (this.reps ?? DEFAULT_REPS) + dir);
+      if (field === "kg") this.kg = Math.max(0, round2((this.kg ?? 0) + delta));
+      else this.reps = Math.max(1, (this.reps ?? DEFAULT_REPS) + delta);
       const v = this.valueEl[field];
-      if (v) v.setText(field === "kg" ? `${this.kg} kg` : `${this.reps}회`);
-      if (this.recEl) this.recEl.setText(`${this.recLabel}   ${this.kg} kg × ${this.reps}회`);
+      if (v) v.setText(field === "kg" ? kgText(this.kg) : `${this.reps}회`);
+      if (this.recEl) this.recEl.setText(`${this.recLabel}   ${kgText(this.kg)} × ${this.reps}회`);
     };
     this.registerDomEvent(btn, "pointerdown", (e: PointerEvent) => {
       e.preventDefault();
