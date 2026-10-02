@@ -1,9 +1,9 @@
 {
   "id": "tlog",
   "name": "운동 일지",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "minAppVersion": "1.5.7",
-  "description": "점진적 과부하 운동 일지. 세트마다 버튼 1탭으로 기록, 지난번 값 미리 채움, 지난 기록 기반 추천 중량·횟수(정보), 기계별 무게 칸, 세션 총량(kg×횟수 합, 맨몸은 총 반복)과 주간·월간 최고 보기, 지난 날짜 기록 수정. 무게·횟수·세트 수는 직접 정한다. 기록은 볼트의 tlog.md 하나.",
+  "description": "점진적 과부하 운동 일지. 세트마다 버튼 1탭으로 기록, 지난번 값 미리 채움, 기계별 무게 칸(−/+ 단위), 세션 총량(kg×횟수 합, 맨몸은 총 반복)과 주간·월간 최고 보기, 지난 날짜 기록 수정. 무게·횟수·세트 수는 직접 정한다. 기록은 볼트의 tlog.md 하나.",
   "author": "sanghwa12",
   "authorUrl": "https://github.com/sanghwa12/training-log-program",
   "isDesktopOnly": false

@@ -5,7 +5,7 @@ import { ItemView, Notice } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 import type TlogPlugin from "./main.ts";
 import {
-  LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, modeOf, measure, fmtMeasure, fmtSet, recommend, historyOf, hints, weeklyTrend, monthlyTrend,
+  LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, modeOf, measure, fmtMeasure, fmtSet, historyOf, hints, weeklyTrend, monthlyTrend,
   todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, ParseError,
 } from "./logic.ts";
 import type { Doc, Exercise, Session, SetRec, HistItem, Mode } from "./logic.ts";
@@ -293,15 +293,8 @@ export class TlogView extends ItemView {
     head.createDiv({ cls: "tlog-exname", text: ex.name });
     head.createDiv({ cls: "tlog-sub", text: idx >= 0 ? `${idx + 1}/${list.length}` : "" });
     el.createDiv({ cls: "tlog-last", text: last ? `지난번 ${fmtShort(last.date)}: ${fmtSetsTotal(last.sets, mode)}` : "첫 기록" });
-    const step = stepOf(ex); // 이 기계의 무게 칸: −/+ 와 추천이 같이 쓴다
-    if (!editingPast) {
-      const rec = recommend(hist, mode, step); // 정보만: 미리 채운 값은 그대로 지난번 기록
-      if (rec) {
-        el.createDiv({ cls: "tlog-rec", text: rec.label });
-        el.createDiv({ cls: "tlog-note", text: rec.why });
-      }
-      for (const h of hints(hist, lastDate, today, mode)) el.createDiv({ cls: "tlog-hint", text: h });
-    }
+    if (!editingPast) for (const h of hints(hist, lastDate, today, mode)) el.createDiv({ cls: "tlog-hint", text: h });
+    const step = stepOf(ex); // 이 기계의 무게 칸: 무게 −/+ 의 단위
 
     // 무게·횟수 −/+ (숫자를 누르면 직접 입력), 그리고 기록 버튼. 세트를 수정 중이면 "n세트 수정"이 된다.
     this.renderStepper(el, "무게", "kg", step);
@@ -369,7 +362,7 @@ export class TlogView extends ItemView {
         nameIn.onkeydown = (e: KeyboardEvent) => { if (e.key === "Enter") void this.renameExercise(ex.id, nameIn.value); };
         window.setTimeout(() => nameIn.focus(), 0);
       }
-      // 무게 칸: 이 기계가 몇 kg씩 올라가는지. 누르면 바로 저장되고 −/+ 와 추천이 따라간다.
+      // 무게 칸: 이 기계가 몇 kg씩 올라가는지. 누르면 바로 저장되고 무게 −/+ 가 따라간다.
       const stepRow = menu.createDiv({ cls: "tlog-today" });
       stepRow.createSpan({ cls: "tlog-today-label", text: "무게 칸" });
       for (const v of STEP_CHOICES) {

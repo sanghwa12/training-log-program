@@ -8,8 +8,7 @@ export const FORMAT = "tlog v4";
 export const LOG_PATH = "tlog.md";
 export const GAP_DAYS = 14;     // 이 일수 이상 쉬었으면 알려 준다(정보)
 export const SAME_STREAK = 3;   // 같은 최고 무게가 이만큼 이어지면 알려 준다(정보)
-export const REP_TOP_MIN = 12;  // 추천: 모든 세트가 이 반복(또는 첫 기록의 최고 반복 중 큰 쪽)에 닿으면 중량 한 칸
-export const DEFAULT_STEP = 2.5; // 무게 칸을 정하지 않은 종목의 −/+ 와 추천 단위
+export const DEFAULT_STEP = 2.5; // 무게 칸을 정하지 않은 종목의 −/+ 단위
 
 /** 종목. 템플릿(A/B) 구분은 없다 — 오늘 할 종목은 사용자가 그때그때 고른다. hidden이면 목록에서만 뺀다(기록은 유지). */
 /** step = 그 기계의 무게 칸(kg). 없으면 DEFAULT_STEP. 파일에는 `%% step id kg %%` 줄로. */
@@ -110,41 +109,8 @@ export const fmtMeasure = (v: number, mode: Mode): string => (mode === "reps" ? 
 /** 세트 하나: 60×8, 맨몸이면 8회. */
 export const fmtSet = (s: SetRec): string => (s.kg === 0 ? `${s.reps}회` : `${s.kg}×${s.reps}`);
 
-// ---------- 추천(정보) ----------
-
-/** 기록 화면에 보여 줄 추천 한 줄과 그 근거. 미리 채움 값은 바꾸지 않는다 — 무엇을 들지는 사용자가 정한다. */
-export type Rec = { label: string; why: string };
-
-/** 이 종목의 무게 한 칸. −/+ 버튼과 추천이 같이 쓴다. */
+/** 이 종목의 무게 한 칸. 무게 −/+ 버튼의 단위. */
 export const stepOf = (ex: Exercise): number => ex.step ?? DEFAULT_STEP;
-
-/**
- * 지난 기록(최신 우선, 오늘 제외)으로 다음 세트 추천. 사용자가 해 온 방식(같은 중량에서 반복 늘리기)에 상한을 둔 더블 프로그레션.
- *  - 상한 = 이 종목 첫 기록의 최고 반복과 REP_TOP_MIN 중 큰 값(레터럴처럼 20회로 시작했으면 20)
- *  - 직전 세션의 작업 세트(최고 무게 세트) 모두 상한 이상 → 한 칸(step) 올리고, 반복은 세트 총량이 줄지 않을 만큼(내림)
- *  - 아니면 같은 무게, 가장 적었던 세트 +1회
- *  - 맨몸(reps 기준이거나 무게 0)은 직전 총 반복 +1
- */
-export function recommend(hist: HistItem[], mode: Mode, step: number = DEFAULT_STEP): Rec | null {
-  if (!hist.length) return null;
-  const last = hist[0].sets;
-  const W = Math.max(...last.map(s => s.kg));
-  if (mode === "reps" || W === 0) {
-    const t = totalReps(last);
-    return { label: `추천 맨몸 · 총 ${t + 1}회`, why: `지난번 총 ${t}회보다 1회 더` };
-  }
-  const work = last.filter(s => s.kg === W).map(s => s.reps);
-  const top = Math.max(REP_TOP_MIN, ...hist[hist.length - 1].sets.map(s => s.reps));
-  const min = Math.min(...work);
-  if (min >= top) {
-    const kg = round2(W + step);
-    const avg = work.reduce((a, b) => a + b, 0) / work.length;
-    const reps = Math.max(1, Math.min(top, Math.floor((avg * W) / kg)));
-    return { label: `추천 ${kg} kg × ${reps}회`, why: `지난번 ${work.length}세트 모두 ${top}회 이상이라 한 칸(+${step} kg) 올림` };
-  }
-  const reps = Math.min(top, min + 1);
-  return { label: `추천 ${W} kg × ${reps}회`, why: `모든 세트 ${reps}회까지 · 전부 ${top}회가 되면 한 칸 올림` };
-}
 
 /** 최고 세트: 무게가 높은 것, 같으면 횟수가 많은 것. */
 export function bestSet(sets: SetRec[]): SetRec | null {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   localDate, localTime, daysBetween, shiftDate, weekStart, weekday, volume, fmtVol, modeOf, measure, fmtMeasure, fmtSet, totalReps, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
   todayBlock, sessionAt, visibleExercises, lastEntryId, toLogText, parseLogText, defaultDoc, newExercise, slugId, removeExercise, restoreExercise,
-  renameExercise, recommend, setStep, stepOf, DEFAULT_STEP, ParseError,
+  renameExercise, setStep, stepOf, DEFAULT_STEP, ParseError,
 } from "../src/logic.ts";
 import type { SetRec, Doc, HistItem } from "../src/logic.ts";
 
@@ -65,32 +65,6 @@ test("hints: 공백·같은 총량 연속·직전 총량 변화(횟수만 늘어
   assert.deepEqual(hints(reps, "2026-09-05", TODAY), ["직전 총량 1,680 kg, 그 전 1,645 kg (+35 kg)"]);
   assert.deepEqual(hints(H(["2026-09-05", "55x5"], ["2026-09-03", "60x8"]), "2026-09-05", TODAY), ["직전 총량 275 kg, 그 전 480 kg (-205 kg)"]);
   for (const h of hints(streak, "2026-08-01", TODAY)) assert.ok(!/다음|목표/.test(h));
-});
-test("recommend: 실제 기록으로 — 상한 도달이면 무게 칸만큼, 아니면 가장 적은 세트 +1, 맨몸은 총 반복 +1", () => {
-  assert.equal(recommend([], "vol"), null);
-  // 랫풀다운: 12회로 시작, 지금 4세트 모두 13 → 37.5 kg, 13×35/37.5=12.1 → 12회
-  const lat = H(["2026-09-30", "35x13 35x13 35x13 35x13"], ["2026-09-21", "35x13 35x13 35x13 35x12"], ["2026-09-09", "35x12 35x12 35x12 35x12"]);
-  assert.deepEqual(recommend(lat, "vol"), { label: "추천 37.5 kg × 12회", why: "지난번 4세트 모두 12회 이상이라 한 칸(+2.5 kg) 올림" });
-  // 5 kg 칸 기계: 40 kg, 13×35/40=11.4 → 11회
-  assert.deepEqual(recommend(lat, "vol", 5), { label: "추천 40 kg × 11회", why: "지난번 4세트 모두 12회 이상이라 한 칸(+5 kg) 올림" });
-  // 체스트프레스: 12 12 12 11 → 같은 무게 12회
-  const chest = H(["2026-09-27", "30x12 30x12 30x12 30x11"], ["2026-09-11", "30x12 30x12 30x11 30x11"]);
-  assert.deepEqual(recommend(chest, "vol"), { label: "추천 30 kg × 12회", why: "모든 세트 12회까지 · 전부 12회가 되면 한 칸 올림" });
-  // 덤벨사이드: 20회로 시작해 상한 20, 4→5 kg로 올린 뒤 15~18 → 5 kg 16회
-  const dside = H(["2026-09-28", "5x15 5x18 5x17 5x17"], ["2026-09-21", "4x21 4x20 4x20 4x20"], ["2026-09-11", "4x20 4x20 4x20 4x20"]);
-  assert.deepEqual(recommend(dside, "vol"), { label: "추천 5 kg × 16회", why: "모든 세트 16회까지 · 전부 20회가 되면 한 칸 올림" });
-  // 상한에 닿으면 정한 칸(덤벨 1 kg)만큼: 20×5/6=16.7 → 16
-  const dsideTop = H(["2026-10-05", "5x20 5x20 5x20 5x20"], ...dside.slice(1).map(h => [h.date, h.sets.map(s => `${s.kg}x${s.reps}`).join(" ")] as [string, string]));
-  assert.equal(recommend(dsideTop, "vol", 1)!.label, "추천 6 kg × 16회");
-  // 사이드레터럴레이즈머신: 3세트만 했어도 모두 20 이상 → 기본 칸 2.5 kg, 24×5/7.5=16
-  const smach = H(["2026-09-30", "5x25 5x25 5x22"], ["2026-09-09", "5x20 5x20 5x20 5x20"]);
-  assert.deepEqual(recommend(smach, "vol"), { label: "추천 7.5 kg × 16회", why: "지난번 3세트 모두 20회 이상이라 한 칸(+2.5 kg) 올림" });
-  // 워밍업(가벼운 세트)은 빼고 판정
-  assert.equal(recommend(H(["2026-10-01", "60x5 80x12 80x12 80x12"], ["2026-09-01", "80x10"]), "vol")!.label, "추천 82.5 kg × 11회");
-  // 맨몸: 총 반복 +1 (예전 2.5 kg 기록이어도 반복만 봄)
-  assert.deepEqual(recommend(H(["2026-09-27", "2.5x6 2.5x5 2.5x4 2.5x3"]), "reps"), { label: "추천 맨몸 · 총 19회", why: "지난번 총 18회보다 1회 더" });
-  assert.equal(recommend(H(["2026-10-01", "0x7 0x6"]), "vol")!.label, "추천 맨몸 · 총 14회");
-  for (const r of [lat, chest, dside, smach].map(h => recommend(h, "vol")!)) assert.ok(!/다음엔|목표/.test(r.label + r.why));
 });
 test("무게 칸: setStep·stepOf, 기본값이면 줄 없음, step 줄 왕복(종목 줄 바로 뒤)", () => {
   const doc = defaultDoc("2026-10-01T10:00:00+09:00");
