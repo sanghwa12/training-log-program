@@ -5,7 +5,7 @@ import { ItemView, Notice } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 import type TlogPlugin from "./main.ts";
 import {
-  LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, modeOf, measure, fmtMeasure, fmtSet, historyOf, hints, weeklyTrend, monthlyTrend,
+  LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, monthKey, shiftMonth, monthWeeks, modeOf, measure, fmtMeasure, fmtSet, historyOf, hints, weeklyTrend, monthlyTrend,
   todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, ParseError,
 } from "./logic.ts";
 import type { Doc, Exercise, Session, SetRec, HistItem, Mode } from "./logic.ts";
@@ -57,6 +57,8 @@ export class TlogView extends ItemView {
   editDate: string | null = null; // 지난 날짜를 고치는 중이면 그 날짜. null = 오늘
   menuOpen = false;
   showHistory = false;
+  calMonth = "";                 // 기록 보기 달력에 보이는 달(YYYY-MM)
+  calDay: string | null = null;  // 달력에서 누른 날짜
   pickDate = false;              // 더보기: 지난 날짜 목록
   renaming = false;              // 더보기: 이름 입력칸
   adding = false;                // 홈: 새 종목 입력칸
@@ -251,6 +253,7 @@ export class TlogView extends ItemView {
     this.editSet = null;
     this.menuOpen = false;
     this.showHistory = false;
+    this.calDay = null;
     this.pickDate = false;
     this.renaming = false;
     this.adding = false;
@@ -344,8 +347,15 @@ export class TlogView extends ItemView {
     if (this.menuOpen) {
       const menu = el.createDiv({ cls: "tlog-menu" });
       const hb = menu.createEl("button", { text: this.showHistory ? "기록 닫기" : `기록 보기 (${allHist.length}회)` });
-      hb.onclick = () => { this.showHistory = !this.showHistory; this.pickDate = false; this.renaming = false; this.render(); };
-      if (this.showHistory) this.renderHistory(menu, allHist);
+      hb.onclick = () => {
+        this.showHistory = !this.showHistory; this.pickDate = false; this.renaming = false;
+        this.calMonth = monthKey(this.editDate ?? today); this.calDay = null;
+        this.render();
+      };
+      if (this.showHistory) {
+        this.renderCalendar(menu, doc, ex, today);
+        this.renderHistory(menu, allHist);
+      }
       const pb = menu.createEl("button", { text: this.pickDate ? "날짜 고르기 닫기" : "지난 기록 고치기" });
       pb.onclick = () => { this.pickDate = !this.pickDate; this.showHistory = false; this.renaming = false; this.render(); };
       if (this.pickDate) this.renderDatePicker(menu, doc, ex, today);
@@ -612,6 +622,60 @@ export class TlogView extends ItemView {
     }
     this.busy = false;
     await this.load();
+  }
+
+  /**
+   * 기록 보기 → 달력. 운동한 날은 점, 이 종목을 한 날은 강조. 날짜를 누르면 그날 종목·합계가 아래에 나오고,
+   * 종목을 누르면 그 날짜의 기록 화면(오늘이면 평소 화면)으로 간다. 안 한 날에도 이 종목을 넣을 수 있다. 미래 날짜는 못 누른다.
+   */
+  private renderCalendar(el: HTMLElement, doc: Doc, ex: Exercise, today: string): void {
+    const month = this.calMonth || monthKey(today);
+    const byDate = new Map(doc.sessions.map(s => [s.date, s] as [string, Session]));
+    const box = el.createDiv({ cls: "tlog-cal" });
+    const head = box.createDiv({ cls: "tlog-cal-head" });
+    const prev = head.createEl("button", { cls: "tlog-link", text: "‹" });
+    prev.onclick = () => { this.calMonth = shiftMonth(month, -1); this.calDay = null; this.render(); };
+    head.createSpan({ text: `${month.slice(0, 4)}년 ${Number(month.slice(5, 7))}월` });
+    const next = head.createEl("button", { cls: "tlog-link", text: "›" });
+    next.disabled = month >= monthKey(today);
+    next.onclick = () => { this.calMonth = shiftMonth(month, 1); this.calDay = null; this.render(); };
+    const grid = box.createDiv({ cls: "tlog-cal-grid" });
+    for (const w of "월화수목금토일") grid.createSpan({ cls: "tlog-cal-wd", text: w });
+    for (const week of monthWeeks(month)) {
+      for (const d of week) {
+        const s = byDate.get(d);
+        const cell = grid.createEl("button", { cls: "tlog-cal-day", text: String(Number(d.slice(8, 10))) });
+        if (monthKey(d) !== month) cell.addClass("is-other");
+        if (s) cell.addClass("has-session");
+        if (s?.entries.some(e => e.id === ex.id)) cell.addClass("has-ex");
+        if (d === today) cell.addClass("is-today");
+        if (d === this.calDay) cell.addClass("is-selected");
+        cell.disabled = d > today;
+        cell.onclick = () => { this.calDay = this.calDay === d ? null : d; this.render(); };
+      }
+    }
+    box.createDiv({ cls: "tlog-note", text: `● 운동한 날 · 굵게 = ${ex.name}` });
+    if (!this.calDay) return;
+
+    // 누른 날짜: 그날 종목과 합계. 누르면 그 날짜·그 종목의 기록 화면으로.
+    const day = this.calDay;
+    const s = byDate.get(day);
+    const panel = box.createDiv({ cls: "tlog-add" });
+    panel.createDiv({ cls: "tlog-hist-title", text: `${fmtDay(day)}${s?.time ? ` · ${s.time} 시작` : ""}` });
+    const go = (id: string) => { this.editDate = day === today ? null : day; this.enterLog(id); };
+    for (const en of s?.entries ?? []) {
+      const exOf = doc.exercises.find(e => e.id === en.id);
+      const mode = modeOf(historyOf(doc.sessions, en.id));
+      const b = panel.createEl("button", { cls: "tlog-pick", text: `${exOf?.name ?? en.id}  ${fmtSetsTotal(en.sets, mode)}` });
+      b.disabled = this.busy || !exOf || exOf.hidden; // 숨긴 종목은 기록 화면을 열 수 없다
+      b.onclick = () => go(en.id);
+    }
+    if (!s) panel.createDiv({ cls: "tlog-note", text: "이 날은 기록이 없습니다" });
+    if (!s?.entries.some(e => e.id === ex.id)) {
+      const add = panel.createEl("button", { cls: "tlog-link", text: `+ 이 날에 ${ex.name} 기록` });
+      add.disabled = this.busy;
+      add.onclick = () => go(ex.id);
+    }
   }
 
   /** 더보기 → 지난 기록 고치기: 이 종목을 한 지난 날짜 전부(최신 우선). 누르면 그 날짜의 기록 화면이 된다. */

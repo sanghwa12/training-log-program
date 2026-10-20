@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  localDate, localTime, daysBetween, shiftDate, weekStart, weekday, volume, fmtVol, modeOf, measure, fmtMeasure, fmtSet, totalReps, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
+  localDate, localTime, daysBetween, shiftDate, weekStart, weekday, shiftMonth, monthWeeks, volume, fmtVol, modeOf, measure, fmtMeasure, fmtSet, totalReps, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
   todayBlock, sessionAt, visibleExercises, lastEntryId, toLogText, parseLogText, defaultDoc, newExercise, slugId, removeExercise, restoreExercise,
   renameExercise, setStep, stepOf, DEFAULT_STEP, ParseError,
 } from "../src/logic.ts";
@@ -29,6 +29,19 @@ test("daysBetween / shiftDate / weekStart(월요일) / weekday", () => {
   assert.equal(weekStart("2026-09-07"), "2026-09-07"); // 월
   assert.equal(weekStart("2026-09-13"), "2026-09-07"); // 일 → 같은 주 월
   assert.equal(weekday("2026-09-08"), "화");
+});
+
+test("shiftMonth / monthWeeks: 월요일 시작 주, 앞뒤 달 칸 포함, 해 넘김", () => {
+  assert.equal(shiftMonth("2026-10", 1), "2026-11");
+  assert.equal(shiftMonth("2026-12", 1), "2027-01");
+  assert.equal(shiftMonth("2026-01", -1), "2025-12");
+  const oct = monthWeeks("2026-10"); // 10/1 목요일
+  assert.equal(oct.length, 5);
+  assert.deepEqual([oct[0][0], oct[0][3], oct[4][6]], ["2026-09-28", "2026-10-01", "2026-11-01"]);
+  assert.ok(oct.every(w => w.length === 7));
+  const jun = monthWeeks("2026-06"); // 6/1 월요일
+  assert.deepEqual([jun[0][0], jun[jun.length - 1][6]], ["2026-06-01", "2026-07-05"]);
+  assert.equal(monthWeeks("2026-02").length, 5); // 2/1 일요일 → 1/26 주부터
 });
 
 // ---------- 세트 요약·추세 ----------

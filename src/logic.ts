@@ -82,6 +82,25 @@ export function weekStart(date: string): string {
 
 export const monthKey = (date: string): string => date.slice(0, 7);
 
+/** "2026-10" + n달. */
+export function shiftMonth(month: string, n: number): string {
+  const [y, m] = month.split("-").map(Number);
+  const k = y * 12 + (m - 1) + n;
+  return `${Math.floor(k / 12)}-${pad2((k % 12) + 1)}`;
+}
+
+/** 달력: 그 달이 걸친 주들(월요일 시작, 주간 최고와 같은 기준). 칸마다 YYYY-MM-DD, 앞뒤 달 날짜 포함. */
+export function monthWeeks(month: string): string[][] {
+  const weeks: string[][] = [];
+  let d = weekStart(`${month}-01`);
+  do {
+    const w: string[] = [];
+    for (let i = 0; i < 7; i++) { w.push(d); d = shiftDate(d, 1); }
+    weeks.push(w);
+  } while (monthKey(d) === month);
+  return weeks;
+}
+
 /** 요일 한 글자. */
 export function weekday(date: string): string {
   const [y, m, d] = date.split("-").map(Number);
