@@ -76,3 +76,8 @@
 .tlog-view button.tlog-cal-day.has-ex::after { background: var(--text-accent); }
 .tlog-view button.tlog-cal-day.is-today { border-color: var(--background-modifier-border); }
 .tlog-view button.tlog-cal-day.is-selected { outline: 2px solid var(--text-accent); }
+
+/* 러닝 체크 */
+.tlog-view button.tlog-run { width: 100%; margin: 6px 0; font-size: 16px; }
+.tlog-view button.tlog-run.is-on { background: var(--interactive-accent); color: var(--text-on-accent); }
+.tlog-view button.tlog-cal-day.has-run { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }

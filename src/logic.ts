@@ -11,12 +11,24 @@ export const SAME_STREAK = 3;   // 같은 최고 무게가 이만큼 이어지�
 export const DEFAULT_STEP = 2.5; // 무게 칸을 정하지 않은 종목의 −/+ 단위
 
 /** 종목. 템플릿(A/B) 구분은 없다 — 오늘 할 종목은 사용자가 그때그때 고른다. hidden이면 목록에서만 뺀다(기록은 유지). */
-/** step = 그 기계의 무게 칸(kg). 없으면 DEFAULT_STEP. 파일에는 `%% step id kg %%` 줄로. */
-export type Exercise = { id: string; name: string; hidden: boolean; step?: number };
+/** step = 그 기계의 무게 칸(kg). 없으면 DEFAULT_STEP. 파일에는 `%% step id kg %%` 줄로.
+ *  routine = 이 종목이 속한 루틴 날. 파일에는 `%% routine id key %%` 줄로. */
+export type Exercise = { id: string; name: string; hidden: boolean; step?: number; routine?: DayKey };
 export type SetRec = { kg: number; reps: number };
 export type Entry = { id: string; sets: SetRec[] };
-/** 하루 = 세션 하나. time은 첫 세트를 찍은 시각. */
-export type Session = { date: string; time: string | null; entries: Entry[] };
+/** 하루 = 세션 하나. time은 첫 세트를 찍은 시각. run = 러닝 했음(`%% run 날짜 %%`),
+ *  day = 그날의 루틴(`%% day 날짜 key %%`, 러닝만 한 날도 순환이 넘어가도록). 둘 다 주석 줄이라 0.5.x 이하는 무시한다. */
+export type Session = { date: string; time: string | null; entries: Entry[]; run?: boolean; day?: DayKey };
+
+/** 3분할 순환: 가슴·팔 → 하체 → 등·어깨 → 다시 가슴·팔. 요일과 무관하고 쉬는 날은 따지지 않는다. */
+export type DayKey = "chest-arms" | "legs" | "back-shoulders";
+export const DAYS: { key: DayKey; name: string }[] = [
+  { key: "chest-arms", name: "가슴·팔" },
+  { key: "legs", name: "하체" },
+  { key: "back-shoulders", name: "등·어깨" },
+];
+const isDayKey = (k: string): k is DayKey => DAYS.some(d => d.key === k);
+export const dayName = (k: DayKey): string => DAYS.find(d => d.key === k)!.name;
 export type Doc = { writtenAt: string; exercises: Exercise[]; sessions: Session[] };
 export type HistItem = { date: string; sets: SetRec[] };
 /** 기간 요약. total = 그 기간 세션 합계(총량 kg 또는 맨몸이면 총 반복)의 최고. */
@@ -283,6 +295,60 @@ export function setStep(doc: Doc, id: string, kg: number): boolean {
   return true;
 }
 
+/** 종목의 루틴 날을 정한다. null이면 루틴에서 뺀다. 모르는 id는 false. */
+export function setRoutine(doc: Doc, id: string, key: DayKey | null): boolean {
+  const ex = doc.exercises.find(e => e.id === id);
+  if (!ex) return false;
+  if (key) ex.routine = key; else delete ex.routine;
+  return true;
+}
+
+// ---------- 루틴 순환·러닝 ----------
+
+export const nextDay = (k: DayKey): DayKey => DAYS[(DAYS.findIndex(d => d.key === k) + 1) % DAYS.length].key;
+
+/** 그 세션이 어느 루틴 날이었나: 루틴 종목의 세트 수가 가장 많은 날(실제로 한 운동이 우선), 없으면 적어 둔 day. */
+export function sessionDay(doc: Doc, s: Session): DayKey | null {
+  const n = new Map<DayKey, number>();
+  for (const en of s.entries) {
+    const k = doc.exercises.find(e => e.id === en.id)?.routine;
+    if (k) n.set(k, (n.get(k) ?? 0) + en.sets.length);
+  }
+  let best: DayKey | null = null;
+  let bn = 0;
+  for (const { key } of DAYS) { const v = n.get(key) ?? 0; if (v > bn) { best = key; bn = v; } }
+  return best ?? s.day ?? null;
+}
+
+/** 오늘의 루틴 날. 오늘 이미 한 게 있으면 그 날, 아니면 마지막으로 한 루틴 날의 다음. 루틴에 넣은 종목이 없으면 null(기능 꺼짐). */
+export function todayDay(doc: Doc, today: string): DayKey | null {
+  if (!doc.exercises.some(e => e.routine && !e.hidden)) return null;
+  const cur = doc.sessions.find(s => s.date === today);
+  const d0 = cur ? sessionDay(doc, cur) : null;
+  if (d0) return d0;
+  for (let i = doc.sessions.length - 1; i >= 0; i--) {
+    const s = doc.sessions[i];
+    if (s.date >= today) continue;
+    const d = sessionDay(doc, s);
+    if (d) return nextDay(d);
+  }
+  return DAYS[0].key;
+}
+
+/** 그 날짜의 러닝 체크를 켜거나 끈다. 켤 때 세션이 없으면 만들고, day가 오면 그날의 루틴으로 적는다. 끌 때 세트가 없는 세션은 지운다. */
+export function setRun(doc: Doc, date: string, on: boolean, time: string | null, day: DayKey | null): void {
+  if (on) {
+    const s = sessionAt(doc, date, time);
+    s.run = true;
+    if (day) s.day = day;
+    return;
+  }
+  const s = doc.sessions.find(x => x.date === date);
+  if (!s) return;
+  delete s.run;
+  if (!s.entries.length) doc.sessions.splice(doc.sessions.indexOf(s), 1);
+}
+
 /** 표시 이름만 바꾼다. id는 기록 줄의 열쇠이므로 그대로 둔다. 빈 이름이면 false. */
 export function renameExercise(doc: Doc, id: string, name: string): boolean {
   const ex = doc.exercises.find(e => e.id === id);
@@ -308,9 +374,12 @@ export function toLogText(doc: Doc): string {
   for (const e of doc.exercises) {
     lines.push(`%% ${e.hidden ? "hidden" : "ex"} ${e.id} ${e.name} %%`);
     if (e.step != null) lines.push(`%% step ${e.id} ${fmtKg(e.step)} %%`);
+    if (e.routine) lines.push(`%% routine ${e.id} ${e.routine} %%`);
   }
   for (const s of doc.sessions) {
     lines.push(`${s.date} session${s.time ? " " + s.time : ""}`);
+    if (s.day) lines.push(`%% day ${s.date} ${s.day} %%`);
+    if (s.run) lines.push(`%% run ${s.date} %%`);
     for (const en of s.entries) {
       if (!en.sets.length) continue;
       lines.push(`${s.date} ${en.id} ${en.sets.map(x => `${fmtKg(x.kg)}x${x.reps}`).join(" ")}`);
@@ -347,8 +416,27 @@ export function parseLogText(text: string): Doc {
       if (line.length < 4 || !line.endsWith("%%")) throw new ParseError(ln, "닫는 %% 가 없음");
       const body = line.slice(2, -2).trim();
       const kw = body.split(/\s+/)[0];
-      if (kw !== "ex" && kw !== "hidden" && kw !== "step") continue; // 그 밖의 주석은 무시
+      if (!["ex", "hidden", "step", "routine", "day", "run"].includes(kw)) continue; // 그 밖의 주석은 무시
       const t = body.split(/\s+/);
+      if (kw === "routine") { // %% routine id key %% — 그 종목 줄 뒤, 기록 앞
+        if (cur) throw new ParseError(ln, "routine 줄은 기록보다 앞에 있어야 함");
+        const ex = doc.exercises.find(e => e.id === t[1]);
+        if (t.length !== 3 || !ex) throw new ParseError(ln, "routine 줄 형식: routine id 루틴 (그 종목 줄 뒤에)");
+        if (!isDayKey(t[2])) throw new ParseError(ln, `모르는 루틴: ${t[2]}`);
+        ex.routine = t[2];
+        continue;
+      }
+      if (kw === "day" || kw === "run") { // %% day 날짜 key %% / %% run 날짜 %% — 그 날짜의 session 줄 뒤
+        if (!cur || cur.date !== t[1]) throw new ParseError(ln, `${kw} 줄은 ${t[1]} session 줄 뒤에 있어야 함`);
+        if (kw === "run") {
+          if (t.length !== 2) throw new ParseError(ln, "run 줄 형식: run 날짜");
+          cur.run = true;
+        } else {
+          if (t.length !== 3 || !isDayKey(t[2])) throw new ParseError(ln, `day 줄 형식: day 날짜 루틴 (${t.slice(2).join(" ")})`);
+          cur.day = t[2];
+        }
+        continue;
+      }
       if (kw === "step") { // %% step id kg %% — 그 종목 줄 뒤, 기록 앞
         if (cur) throw new ParseError(ln, "step 줄은 기록보다 앞에 있어야 함");
         const ex = doc.exercises.find(e => e.id === t[1]);

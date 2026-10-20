@@ -6,9 +6,9 @@ import type { WorkspaceLeaf } from "obsidian";
 import type TlogPlugin from "./main.ts";
 import {
   LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, monthKey, shiftMonth, monthWeeks, modeOf, measure, fmtMeasure, fmtSet, historyOf, hints, weeklyTrend, monthlyTrend,
-  todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, ParseError,
+  todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, DAYS, dayName, todayDay, setRoutine, setRun, ParseError,
 } from "./logic.ts";
-import type { Doc, Exercise, Session, SetRec, HistItem, Mode } from "./logic.ts";
+import type { Doc, Exercise, Session, SetRec, HistItem, Mode, DayKey } from "./logic.ts";
 import { readDoc, updateDoc, logFile } from "./store.ts";
 
 export const VIEW_TYPE = "tlog-view";
@@ -59,6 +59,7 @@ export class TlogView extends ItemView {
   showHistory = false;
   calMonth = "";                 // 기록 보기 달력에 보이는 달(YYYY-MM)
   calDay: string | null = null;  // 달력에서 누른 날짜
+  dayPick: DayKey | null = null; // 오늘 루틴을 칩으로 바꿨으면 그 날(그날만 유효)
   pickDate = false;              // 더보기: 지난 날짜 목록
   renaming = false;              // 더보기: 이름 입력칸
   adding = false;                // 홈: 새 종목 입력칸
@@ -140,7 +141,7 @@ export class TlogView extends ItemView {
     this.recEl = null;
     const doc = this.doc ?? defaultDoc("");
     const today = localDate();
-    if (this.day !== today) { this.day = today; this.logMode = false; this.homeChosen = false; this.editDate = null; this.resetPanels(); }
+    if (this.day !== today) { this.day = today; this.logMode = false; this.homeChosen = false; this.editDate = null; this.dayPick = null; this.resetPanels(); }
     const block = todayBlock(doc, today);
     // 0탭 복구: 오늘 기록이 있고 아직 홈을 고르지 않았으면 마지막으로 찍던 종목의 기록 화면으로.
     if (!this.error && !this.logMode && !this.homeChosen) {
@@ -179,22 +180,49 @@ export class TlogView extends ItemView {
     const sets = block ? block.entries.reduce((n, e) => n + e.sets.length, 0) : 0;
 
     el.createDiv({ cls: "tlog-date", text: `오늘 ${fmtDay(today)}` });
-    if (block) el.createDiv({ cls: "tlog-title", text: `오늘 ${sets}세트 저장됨${block.time ? ` · ${block.time} 시작` : ""}` });
+    if (block && !sets) el.createDiv({ cls: "tlog-title", text: "오늘 러닝만 기록됨" });
+    else if (block) el.createDiv({ cls: "tlog-title", text: `오늘 ${sets}세트 저장됨${block.time ? ` · ${block.time} 시작` : ""}` });
     else if (lastS) el.createDiv({ cls: "tlog-title", text: `지난 운동 ${fmtShort(lastS.date)}${lastS.time ? " " + lastS.time : ""} · ${daysBetween(lastS.date, today)}일 전` });
     else el.createDiv({ cls: "tlog-title", text: "첫 운동" });
     if (lastS && daysBetween(lastS.date, today) >= GAP_DAYS) el.createDiv({ cls: "tlog-hint", text: `${daysBetween(lastS.date, today)}일 만의 운동` });
+    // 루틴: 오늘 할 날(순서대로 자동, 칩을 눌러 바꿀 수 있음)과 러닝 체크.
+    const day = this.shownDay(doc, today);
+    if (day) {
+      const bar = el.createDiv({ cls: "tlog-today" });
+      bar.createSpan({ cls: "tlog-today-label", text: "루틴" });
+      for (const d of DAYS) {
+        const b = bar.createEl("button", { cls: "tlog-setbtn", text: d.name });
+        if (d.key === day) b.addClass("is-selected");
+        b.onclick = () => { this.dayPick = d.key; this.render(); };
+      }
+    }
+    const ran = !!block?.run;
+    const runBtn = el.createEl("button", { cls: ran ? "tlog-run is-on" : "tlog-run", text: ran ? "오늘 러닝 ✓" : "오늘 러닝 ☐" });
+    runBtn.disabled = this.busy || !!this.error;
+    runBtn.onclick = () => void this.toggleRun(today, !ran, day);
     el.createDiv({ cls: "tlog-note", text: list.length ? "종목을 누르면 기록 화면이 열립니다" : "종목이 없습니다. 아래에서 추가하세요." });
 
-    // 종목 목록: 파일 순서. 오늘 세트가 있으면 "오늘:", 없으면 지난번 기록.
+    // 종목 목록: 파일 순서. 루틴이 있으면 오늘 루틴 종목을 위에, 나머지는 아래 "그 밖의 종목"에.
+    // 오늘 세트가 있으면 "오늘:", 없으면 지난번 기록.
     const listEl = el.createDiv({ cls: "tlog-list" });
-    for (const ex of list) {
+    const row = (ex: Exercise) => {
       const todaySets = block?.entries.find(e => e.id === ex.id)?.sets ?? [];
       const last = histOf(ex.id)[0];
       const mode = modeOf(historyOf(doc.sessions, ex.id));
-      const row = listEl.createDiv({ cls: this.error ? "tlog-item" : "tlog-item is-link" });
-      row.createDiv({ cls: "tlog-item-main", text: `${ex.name} ›` });
-      row.createDiv({ cls: "tlog-sub", text: todaySets.length ? `오늘: ${fmtSetsTotal(todaySets, mode)}` : last ? `지난번 ${fmtShort(last.date)}: ${fmtSetsTotal(last.sets, mode)}` : "기록 없음" });
-      if (!this.error) row.onclick = () => this.enterLog(ex.id);
+      const r = listEl.createDiv({ cls: this.error ? "tlog-item" : "tlog-item is-link" });
+      r.createDiv({ cls: "tlog-item-main", text: `${ex.name} ›` });
+      r.createDiv({ cls: "tlog-sub", text: todaySets.length ? `오늘: ${fmtSetsTotal(todaySets, mode)}` : last ? `지난번 ${fmtShort(last.date)}: ${fmtSetsTotal(last.sets, mode)}` : "기록 없음" });
+      if (!this.error) r.onclick = () => this.enterLog(ex.id);
+    };
+    if (day) {
+      const mine = list.filter(e => e.routine === day);
+      listEl.createDiv({ cls: "tlog-hist-title", text: `오늘 · ${dayName(day)}` });
+      if (!mine.length) listEl.createDiv({ cls: "tlog-note", text: "이 루틴에 넣은 종목이 없습니다. 러닝만 하는 날이면 위에서 러닝을 체크하세요." });
+      mine.forEach(row);
+      listEl.createDiv({ cls: "tlog-hist-title", text: "그 밖의 종목" });
+      list.filter(e => e.routine !== day).forEach(row);
+    } else {
+      list.forEach(row);
     }
 
     // 종목 추가 · 숨긴 종목 · 동기화
@@ -267,7 +295,8 @@ export class TlogView extends ItemView {
     const editingPast = date !== today;
     const block = editingPast ? doc.sessions.find(s => s.date === date) ?? null : todayBlk;
     const { lastDate, histOf } = pastOf(doc, date);
-    const list = visibleExercises(doc);
+    // "다음 ›"과 n/N: 루틴에 넣은 종목이면 같은 루틴 안에서, 아니면 전체 목록에서.
+    const list = visibleExercises(doc).filter(e => !ex.routine || e.routine === ex.routine);
     const idx = list.findIndex(e => e.id === ex.id);
     const nextEx: Exercise | null = idx >= 0 && idx + 1 < list.length ? list[idx + 1] : null;
     const sets = block?.entries.find(e => e.id === ex.id)?.sets ?? [];
@@ -370,6 +399,15 @@ export class TlogView extends ItemView {
         save.onclick = () => void this.renameExercise(ex.id, nameIn.value);
         nameIn.onkeydown = (e: KeyboardEvent) => { if (e.key === "Enter") void this.renameExercise(ex.id, nameIn.value); };
         window.setTimeout(() => nameIn.focus(), 0);
+      }
+      // 루틴: 이 종목을 어느 날에 할지. 누르면 바로 저장되고 홈의 "오늘" 묶음이 따라간다.
+      const routineRow = menu.createDiv({ cls: "tlog-today" });
+      routineRow.createSpan({ cls: "tlog-today-label", text: "루틴" });
+      for (const d of [...DAYS.map(x => ({ key: x.key as DayKey | null, name: x.name })), { key: null, name: "없음" }]) {
+        const b = routineRow.createEl("button", { cls: "tlog-setbtn", text: d.name });
+        if ((ex.routine ?? null) === d.key) b.addClass("is-selected");
+        b.disabled = this.busy;
+        b.onclick = () => void this.setRoutine(ex.id, d.key);
       }
       // 무게 칸: 이 기계가 몇 kg씩 올라가는지. 누르면 바로 저장되고 무게 −/+ 가 따라간다.
       const stepRow = menu.createDiv({ cls: "tlog-today" });
@@ -518,7 +556,7 @@ export class TlogView extends ItemView {
         if (!s || !e || i >= e.sets.length) return;
         e.sets.splice(i, 1);
         if (!e.sets.length) s.entries.splice(s.entries.indexOf(e), 1);
-        if (!s.entries.length) doc.sessions.splice(doc.sessions.indexOf(s), 1);
+        if (!s.entries.length && !s.run) doc.sessions.splice(doc.sessions.indexOf(s), 1); // 러닝 체크가 있으면 그날은 남긴다
       });
       this.plugin.lastWriteAt = Date.now();
       this.editSet = null;
@@ -609,6 +647,43 @@ export class TlogView extends ItemView {
     await this.load();
   }
 
+  /** 홈에 보일 오늘의 루틴 날: 칩으로 바꿨으면 그것, 아니면 순서대로 자동. 루틴에 넣은 종목이 없으면 null. */
+  private shownDay(doc: Doc, today: string): DayKey | null {
+    const auto = todayDay(doc, today);
+    return auto && (this.dayPick ?? auto);
+  }
+
+  /** 종목의 루틴 날을 저장한다. null이면 루틴에서 뺀다. */
+  private async setRoutine(id: string, key: DayKey | null): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    this.render();
+    try {
+      await updateDoc(this.app, (doc) => { if (!setRoutine(doc, id, key)) throw new Error("그 종목이 이미 없습니다"); });
+      this.plugin.lastWriteAt = Date.now();
+    } catch (e) {
+      new Notice(e instanceof ParseError ? `${LOG_PATH} ${e.message}` : `루틴 저장 실패: ${String(e)}`);
+    }
+    this.busy = false;
+    await this.load();
+  }
+
+  /** 그 날짜의 러닝 체크를 켜거나 끈다. 오늘이면 지금 시각과 홈에 보이는 루틴 날을 함께 적는다(러닝만 한 날도 순환이 넘어가도록). */
+  private async toggleRun(date: string, on: boolean, day: DayKey | null): Promise<void> {
+    if (this.busy) return;
+    const isToday = date === localDate();
+    this.busy = true;
+    this.render();
+    try {
+      await updateDoc(this.app, (doc) => setRun(doc, date, on, isToday ? localTime() : null, isToday ? day : null));
+      this.plugin.lastWriteAt = Date.now();
+    } catch (e) {
+      new Notice(e instanceof ParseError ? `${LOG_PATH} ${e.message}` : `러닝 저장 실패: ${String(e)}`);
+    }
+    this.busy = false;
+    await this.load();
+  }
+
   /** 종목의 무게 칸을 저장한다. 더보기는 열어 둔 채로(선택이 바뀐 걸 바로 보이게). */
   private async setStep(id: string, kg: number): Promise<void> {
     if (this.busy) return;
@@ -648,13 +723,14 @@ export class TlogView extends ItemView {
         if (monthKey(d) !== month) cell.addClass("is-other");
         if (s) cell.addClass("has-session");
         if (s?.entries.some(e => e.id === ex.id)) cell.addClass("has-ex");
+        if (s?.run) cell.addClass("has-run");
         if (d === today) cell.addClass("is-today");
         if (d === this.calDay) cell.addClass("is-selected");
         cell.disabled = d > today;
         cell.onclick = () => { this.calDay = this.calDay === d ? null : d; this.render(); };
       }
     }
-    box.createDiv({ cls: "tlog-note", text: `● 운동한 날 · 굵게 = ${ex.name}` });
+    box.createDiv({ cls: "tlog-note", text: `● 운동한 날 · 굵게 = ${ex.name} · 밑줄 = 러닝` });
     if (!this.calDay) return;
 
     // 누른 날짜: 그날 종목과 합계. 누르면 그 날짜·그 종목의 기록 화면으로.
@@ -671,6 +747,10 @@ export class TlogView extends ItemView {
       b.onclick = () => go(en.id);
     }
     if (!s) panel.createDiv({ cls: "tlog-note", text: "이 날은 기록이 없습니다" });
+    const ran = !!s?.run;
+    const runBtn = panel.createEl("button", { cls: ran ? "tlog-run is-on" : "tlog-run", text: ran ? "러닝 ✓" : "러닝 ☐" });
+    runBtn.disabled = this.busy;
+    runBtn.onclick = () => void this.toggleRun(day, !ran, day === today ? this.shownDay(doc, today) : null);
     if (!s?.entries.some(e => e.id === ex.id)) {
       const add = panel.createEl("button", { cls: "tlog-link", text: `+ 이 날에 ${ex.name} 기록` });
       add.disabled = this.busy;
