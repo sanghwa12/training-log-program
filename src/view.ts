@@ -18,7 +18,6 @@ const REPEAT_EVERY = 200;    // 반복 간격(ms) = 초당 5회
 const REPEAT_MAX = 40;       // 한 번 누름당 최대 반복
 const RELOAD_DEBOUNCE = 150; // modify 이벤트 디바운스(ms)
 const HISTORY_ROWS = 10;     // 기록 보기의 날짜별 줄 수
-const PICK_DATES = 10;       // "지난 기록 고치기"에 보이는 최근 세션 날짜 수
 const DEFAULT_REPS = 8;      // 기록이 전혀 없을 때의 횟수 초기값
 
 type Field = "kg" | "reps";
@@ -615,18 +614,18 @@ export class TlogView extends ItemView {
     await this.load();
   }
 
-  /** 더보기 → 지난 기록 고치기: 최근 세션 날짜 목록. 누르면 그 날짜의 기록 화면이 된다. */
+  /** 더보기 → 지난 기록 고치기: 이 종목을 한 지난 날짜 전부(최신 우선). 누르면 그 날짜의 기록 화면이 된다. */
   private renderDatePicker(el: HTMLElement, doc: Doc, ex: Exercise, today: string): void {
     const box = el.createDiv({ cls: "tlog-add" });
-    const past = doc.sessions.filter(s => s.date !== today).slice(-PICK_DATES).reverse();
-    const mode = modeOf(historyOf(doc.sessions, ex.id));
-    if (!past.length) { box.createDiv({ cls: "tlog-note", text: "지난 날짜가 없습니다" }); return; }
-    box.createDiv({ cls: "tlog-note", text: "날짜를 누르면 그 날짜의 기록 화면이 열립니다. 거기서 세트를 추가·수정·삭제하면 그 날짜로 저장됩니다." });
-    for (const s of past) {
-      const sets = s.entries.find(e => e.id === ex.id)?.sets ?? [];
-      const b = box.createEl("button", { cls: "tlog-pick", text: `${fmtDay(s.date)}  ${sets.length ? fmtSetsTotal(sets, mode) : "이 종목 없음"}` });
+    const hist = historyOf(doc.sessions, ex.id);
+    const mode = modeOf(hist);
+    const past = hist.filter(h => h.date !== today);
+    if (!past.length) { box.createDiv({ cls: "tlog-note", text: "이 종목의 지난 기록이 없습니다" }); return; }
+    box.createDiv({ cls: "tlog-note", text: "이 종목을 한 날짜입니다. 누르면 그 날짜의 기록 화면이 열리고, 세트를 추가·수정·삭제하면 그 날짜로 저장됩니다." });
+    for (const h of past) {
+      const b = box.createEl("button", { cls: "tlog-pick", text: `${fmtDay(h.date)}  ${fmtSetsTotal(h.sets, mode)}` });
       b.disabled = this.busy;
-      b.onclick = () => { this.editDate = s.date; this.valFor = ""; this.resetPanels(); this.render(); };
+      b.onclick = () => { this.editDate = h.date; this.valFor = ""; this.resetPanels(); this.render(); };
     }
   }
 
