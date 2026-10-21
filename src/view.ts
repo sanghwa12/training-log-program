@@ -202,6 +202,22 @@ export class TlogView extends ItemView {
     const runBtn = el.createEl("button", { cls: ran ? "tlog-run is-on" : "tlog-run", text: `${ran ? "오늘 러닝 ✓" : "오늘 러닝 ☐"}${runFor}` });
     runBtn.disabled = this.busy || !!this.error;
     runBtn.onclick = () => void this.toggleRun(today, !ran, day);
+
+    // 오늘 한 운동: 기록한 순서대로 세트와 합계. 누르면 그 종목 화면(숨긴 종목은 보기만).
+    const done = block?.entries.filter(e => e.sets.length) ?? [];
+    if (done.length) {
+      const box = el.createDiv({ cls: "tlog-list" });
+      box.createDiv({ cls: "tlog-hist-title", text: `오늘 한 운동 · ${done.length}종목 ${sets}세트` });
+      for (const en of done) {
+        const exOf = doc.exercises.find(e => e.id === en.id);
+        const mode = modeOf(historyOf(doc.sessions, en.id));
+        const open = !!exOf && !exOf.hidden && !this.error;
+        const r = box.createDiv({ cls: open ? "tlog-item is-link" : "tlog-item" });
+        r.createDiv({ cls: "tlog-item-main", text: `${exOf?.name ?? en.id}${open ? " ›" : ""}` });
+        r.createDiv({ cls: "tlog-sub", text: fmtSetsTotal(en.sets, mode) });
+        if (open) r.onclick = () => this.enterLog(en.id);
+      }
+    }
     el.createDiv({ cls: "tlog-note", text: list.length ? "종목을 누르면 기록 화면이 열립니다" : "종목이 없습니다. 아래에서 추가하세요." });
 
     // 종목 목록: 파일 순서. 루틴이 있으면 오늘 루틴 종목을 위에, 나머지는 아래 "그 밖의 종목"에.
