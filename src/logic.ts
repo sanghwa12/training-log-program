@@ -13,23 +13,26 @@ export const DEFAULT_STEP = 2.5; // 무게 칸을 정하지 않은 종목의 −
 /** 종목. 템플릿(A/B) 구분은 없다 — 오늘 할 종목은 사용자가 그때그때 고른다. hidden이면 목록에서만 뺀다(기록은 유지). */
 /** step = 그 기계의 무게 칸(kg). 없으면 DEFAULT_STEP. 파일에는 `%% step id kg %%` 줄로.
  *  routine = 이 종목이 속한 루틴 날. 파일에는 `%% routine id key %%` 줄로. */
-export type Exercise = { id: string; name: string; hidden: boolean; step?: number; routine?: DayKey };
+export type Exercise = { id: string; name: string; hidden: boolean; step?: number; routine?: string };
 export type SetRec = { kg: number; reps: number };
 export type Entry = { id: string; sets: SetRec[] };
 /** 하루 = 세션 하나. time은 첫 세트를 찍은 시각. run = 러닝 했음(`%% run 날짜 %%`),
- *  day = 그날의 루틴(`%% day 날짜 key %%`, 러닝만 한 날도 순환이 넘어가도록). 둘 다 주석 줄이라 0.5.x 이하는 무시한다. */
-export type Session = { date: string; time: string | null; entries: Entry[]; run?: boolean; day?: DayKey };
+ *  day = 그날의 루틴 날 key(`%% day 날짜 key %%`, 러닝만 한 날도 순환이 넘어가도록). 둘 다 주석 줄이라 0.5.x 이하는 무시한다. */
+export type Session = { date: string; time: string | null; entries: Entry[]; run?: boolean; day?: string };
 
-/** 3분할 순환: 가슴·팔 → 하체 → 등·어깨 → 다시 가슴·팔. 요일과 무관하고 쉬는 날은 따지지 않는다. */
-export type DayKey = "chest-arms" | "legs" | "back-shoulders";
-export const DAYS: { key: DayKey; name: string }[] = [
-  { key: "chest-arms", name: "가슴·팔" },
-  { key: "legs", name: "하체" },
-  { key: "back-shoulders", name: "등·어깨" },
-];
-const isDayKey = (k: string): k is DayKey => DAYS.some(d => d.key === k);
-export const dayName = (k: DayKey): string => DAYS.find(d => d.key === k)!.name;
-export type Doc = { writtenAt: string; exercises: Exercise[]; sessions: Session[] };
+/**
+ * 루틴 날. 순서대로 돌고(요일과 무관, 쉬는 날은 따지지 않음) 사용자가 앱에서 이름·개수·순서를 바꾼다.
+ * key는 종목·세션이 가리키는 고정 열쇠라 이름을 바꿔도 그대로다. 파일에는 맨 위에 `%% rday key 이름 %%` 줄로, 순서대로.
+ */
+export type Day = { key: string; name: string };
+/** 새 파일의 기본 분할: 가슴·등 → 하체 → 어깨·팔. */
+export const DEFAULT_DAYS: Day[] = [{ key: "d1", name: "가슴·등" }, { key: "d2", name: "하체" }, { key: "d3", name: "어깨·팔" }];
+export const DEFAULT_RUN_DAY = "d2"; // 러닝이 하체 칸을 대신한다
+/** 0.6.0은 이 세 날이 고정이었다. rday 줄 없이 이 key를 쓰는 파일은 그 뜻 그대로 읽는다. */
+export const LEGACY_DAYS: Day[] = [{ key: "chest-arms", name: "가슴·팔" }, { key: "legs", name: "하체" }, { key: "back-shoulders", name: "등·어깨" }];
+export const dayName = (doc: Doc, key: string): string => doc.days.find(d => d.key === key)?.name ?? key;
+/** runDay = 러닝이 대신하는 날(기본: 하체). 러닝한 날은 그 칸도 채운 것으로 친다. 파일에는 `%% runday key %%`. */
+export type Doc = { writtenAt: string; exercises: Exercise[]; sessions: Session[]; days: Day[]; runDay?: string };
 export type HistItem = { date: string; sets: SetRec[] };
 /** 기간 요약. total = 그 기간 세션 합계(총량 kg 또는 맨몸이면 총 반복)의 최고. */
 export type Period = { key: string; label: string; total: number; best: SetRec; sessions: number };
@@ -295,48 +298,128 @@ export function setStep(doc: Doc, id: string, kg: number): boolean {
   return true;
 }
 
-/** 종목의 루틴 날을 정한다. null이면 루틴에서 뺀다. 모르는 id는 false. */
-export function setRoutine(doc: Doc, id: string, key: DayKey | null): boolean {
+/** 종목의 루틴 날을 정한다. null이면 루틴에서 뺀다. 모르는 id나 없는 날은 false. */
+export function setRoutine(doc: Doc, id: string, key: string | null): boolean {
   const ex = doc.exercises.find(e => e.id === id);
-  if (!ex) return false;
+  if (!ex || (key && !doc.days.some(d => d.key === key))) return false;
   if (key) ex.routine = key; else delete ex.routine;
   return true;
 }
 
+// ---------- 루틴 날 편집 ----------
+
+/** 날을 맨 뒤에 추가하고 key를 돌려준다(d1, d2… 중 안 쓰는 것). 빈 이름이면 null. */
+export function addDay(doc: Doc, name: string): string | null {
+  const clean = name.trim();
+  if (!clean) return null;
+  const used = new Set(doc.days.map(d => d.key));
+  let n = 1;
+  while (used.has(`d${n}`)) n++;
+  doc.days.push({ key: `d${n}`, name: clean });
+  return `d${n}`;
+}
+
+/** 날 이름만 바꾼다(key는 그대로라 종목 지정과 기록이 따라온다). 빈 이름·없는 날은 false. */
+export function renameDay(doc: Doc, key: string, name: string): boolean {
+  const d = doc.days.find(x => x.key === key);
+  const clean = name.trim();
+  if (!d || !clean) return false;
+  d.name = clean;
+  return true;
+}
+
+/** 날을 한 칸 앞으로(dir -1) 또는 뒤로(dir 1). 끝이면 그대로. */
+export function moveDay(doc: Doc, key: string, dir: -1 | 1): void {
+  const i = doc.days.findIndex(d => d.key === key);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= doc.days.length) return;
+  [doc.days[i], doc.days[j]] = [doc.days[j], doc.days[i]];
+}
+
+/** 날을 지운다. 그 날에 넣은 종목은 루틴에서 빠지고, 세션의 그날 표시도 지운다. 루틴이 비었던 종목 수를 돌려준다. */
+export function removeDay(doc: Doc, key: string): number {
+  const i = doc.days.findIndex(d => d.key === key);
+  if (i < 0) return 0;
+  doc.days.splice(i, 1);
+  let n = 0;
+  for (const e of doc.exercises) if (e.routine === key) { delete e.routine; n++; }
+  for (const s of doc.sessions) if (s.day === key) delete s.day;
+  if (doc.runDay === key) delete doc.runDay;
+  return n;
+}
+
+/** 러닝이 대신하는 날을 정한다. null이면 러닝은 순서에 영향을 주지 않는다. 없는 날은 false. */
+export function setRunDay(doc: Doc, key: string | null): boolean {
+  if (key && !doc.days.some(d => d.key === key)) return false;
+  if (key) doc.runDay = key; else delete doc.runDay;
+  return true;
+}
+
+const runDayOf = (doc: Doc): string | null => (doc.runDay && doc.days.some(d => d.key === doc.runDay) ? doc.runDay : null);
+
 // ---------- 루틴 순환·러닝 ----------
 
-export const nextDay = (k: DayKey): DayKey => DAYS[(DAYS.findIndex(d => d.key === k) + 1) % DAYS.length].key;
+/** 순서상 다음 날. 없는 key면 첫 날. 날이 없으면 null. */
+export function nextDay(doc: Doc, key: string): string | null {
+  if (!doc.days.length) return null;
+  const i = doc.days.findIndex(d => d.key === key);
+  return doc.days[(i + 1) % doc.days.length].key;
+}
 
-/** 그 세션이 어느 루틴 날이었나: 루틴 종목의 세트 수가 가장 많은 날(실제로 한 운동이 우선), 없으면 적어 둔 day. */
-export function sessionDay(doc: Doc, s: Session): DayKey | null {
-  const n = new Map<DayKey, number>();
+/**
+ * 그 세션이 어느 루틴 날이었나: 루틴 종목의 세트 수가 가장 많은 날(실제로 한 운동이 우선, 같으면 앞선 날).
+ * 루틴 종목이 없으면 러닝한 날은 러닝 날, 그것도 아니면 적어 둔 day.
+ */
+export function sessionDay(doc: Doc, s: Session): string | null {
+  const n = new Map<string, number>();
   for (const en of s.entries) {
     const k = doc.exercises.find(e => e.id === en.id)?.routine;
     if (k) n.set(k, (n.get(k) ?? 0) + en.sets.length);
   }
-  let best: DayKey | null = null;
+  let best: string | null = null;
   let bn = 0;
-  for (const { key } of DAYS) { const v = n.get(key) ?? 0; if (v > bn) { best = key; bn = v; } }
-  return best ?? s.day ?? null;
+  for (const { key } of doc.days) { const v = n.get(key) ?? 0; if (v > bn) { best = key; bn = v; } }
+  if (best) return best;
+  const rd = runDayOf(doc);
+  if (s.run && rd) return rd;
+  return s.day && doc.days.some(d => d.key === s.day) ? s.day : null;
 }
 
-/** 오늘의 루틴 날. 오늘 이미 한 게 있으면 그 날, 아니면 마지막으로 한 루틴 날의 다음. 루틴에 넣은 종목이 없으면 null(기능 꺼짐). */
-export function todayDay(doc: Doc, today: string): DayKey | null {
-  if (!doc.exercises.some(e => e.routine && !e.hidden)) return null;
+/**
+ * 그 세션 다음에 올 날. 그날 채운 날(주된 날 + 러닝했으면 러닝 날)을 건너뛰고 순서상 다음.
+ * 예: 가슴·등 → 하체 → 어깨·팔에서 러닝 + 가슴·등이면 하체도 채웠으니 다음은 어깨·팔.
+ */
+export function nextAfter(doc: Doc, s: Session): string | null {
+  const main = sessionDay(doc, s);
+  if (!main) return null;
+  const covered = new Set([main]);
+  const rd = runDayOf(doc);
+  if (s.run && rd) covered.add(rd);
+  let k = main;
+  for (let i = 0; i < doc.days.length; i++) {
+    k = nextDay(doc, k)!;
+    if (!covered.has(k)) return k;
+  }
+  return nextDay(doc, main);
+}
+
+/** 오늘의 루틴 날. 오늘 이미 한 게 있으면 그 날, 아니면 마지막으로 한 루틴 날의 다음. 날이나 루틴에 넣은 종목이 없으면 null(기능 꺼짐). */
+export function todayDay(doc: Doc, today: string): string | null {
+  if (!doc.days.length || !doc.exercises.some(e => e.routine && !e.hidden)) return null;
   const cur = doc.sessions.find(s => s.date === today);
   const d0 = cur ? sessionDay(doc, cur) : null;
   if (d0) return d0;
   for (let i = doc.sessions.length - 1; i >= 0; i--) {
     const s = doc.sessions[i];
     if (s.date >= today) continue;
-    const d = sessionDay(doc, s);
-    if (d) return nextDay(d);
+    const next = nextAfter(doc, s);
+    if (next) return next;
   }
-  return DAYS[0].key;
+  return doc.days[0].key;
 }
 
 /** 그 날짜의 러닝 체크를 켜거나 끈다. 켤 때 세션이 없으면 만들고, day가 오면 그날의 루틴으로 적는다. 끌 때 세트가 없는 세션은 지운다. */
-export function setRun(doc: Doc, date: string, on: boolean, time: string | null, day: DayKey | null): void {
+export function setRun(doc: Doc, date: string, on: boolean, time: string | null, day: string | null): void {
   if (on) {
     const s = sessionAt(doc, date, time);
     s.run = true;
@@ -371,6 +454,8 @@ const fmtKg = (x: number): string => String(round2(x));
  */
 export function toLogText(doc: Doc): string {
   const lines: string[] = [`%% ${FORMAT} ${doc.writtenAt} %%`];
+  for (const d of doc.days) lines.push(`%% rday ${d.key} ${d.name} %%`);
+  if (doc.runDay) lines.push(`%% runday ${doc.runDay} %%`);
   for (const e of doc.exercises) {
     lines.push(`%% ${e.hidden ? "hidden" : "ex"} ${e.id} ${e.name} %%`);
     if (e.step != null) lines.push(`%% step ${e.id} ${fmtKg(e.step)} %%`);
@@ -403,9 +488,10 @@ export function parseLogText(text: string): Doc {
   // 이름이 시작하는 토큰 위치. v1: ex id 템플릿 세트 lo hi inc start 이름 / v2: ex id 템플릿 세트 이름 / v3: ex id 템플릿 이름 / v4: ex id 이름
   const nameFrom = version === 1 ? 8 : version === 2 ? 4 : version === 3 ? 3 : 2;
   const legacy = version < 4; // 템플릿 토큰이 있던 형식
-  const doc: Doc = { writtenAt: head[2], exercises: [], sessions: [] };
+  const doc: Doc = { writtenAt: head[2], exercises: [], sessions: [], days: [] };
   const ids = new Set<string>();
   let cur: Session | null = null;
+  const dayRefs: { ln: number; key: string }[] = []; // routine·day 줄이 가리키는 날 — 날 목록이 정해진 뒤 끝에서 확인
 
   for (let i = 1; i < lines.length; i++) {
     const ln = i + 1;
@@ -416,13 +502,27 @@ export function parseLogText(text: string): Doc {
       if (line.length < 4 || !line.endsWith("%%")) throw new ParseError(ln, "닫는 %% 가 없음");
       const body = line.slice(2, -2).trim();
       const kw = body.split(/\s+/)[0];
-      if (!["ex", "hidden", "step", "routine", "day", "run"].includes(kw)) continue; // 그 밖의 주석은 무시
+      if (!["ex", "hidden", "step", "routine", "day", "run", "rday", "runday"].includes(kw)) continue; // 그 밖의 주석은 무시
       const t = body.split(/\s+/);
+      if (kw === "runday") { // %% runday key %% — 기록 앞
+        if (cur) throw new ParseError(ln, "runday 줄은 기록보다 앞에 있어야 함");
+        if (t.length !== 2) throw new ParseError(ln, "runday 줄 형식: runday key");
+        dayRefs.push({ ln, key: t[1] });
+        doc.runDay = t[1];
+        continue;
+      }
+      if (kw === "rday") { // %% rday key 이름 %% — 기록 앞, 순서 = 순환 순서
+        if (cur) throw new ParseError(ln, "rday 줄은 기록보다 앞에 있어야 함");
+        if (t.length < 3 || !ID_RE.test(t[1])) throw new ParseError(ln, "rday 줄 형식: rday key 이름");
+        if (doc.days.some(d => d.key === t[1])) throw new ParseError(ln, `루틴 날 key 중복: ${t[1]}`);
+        doc.days.push({ key: t[1], name: t.slice(2).join(" ") });
+        continue;
+      }
       if (kw === "routine") { // %% routine id key %% — 그 종목 줄 뒤, 기록 앞
         if (cur) throw new ParseError(ln, "routine 줄은 기록보다 앞에 있어야 함");
         const ex = doc.exercises.find(e => e.id === t[1]);
         if (t.length !== 3 || !ex) throw new ParseError(ln, "routine 줄 형식: routine id 루틴 (그 종목 줄 뒤에)");
-        if (!isDayKey(t[2])) throw new ParseError(ln, `모르는 루틴: ${t[2]}`);
+        dayRefs.push({ ln, key: t[2] });
         ex.routine = t[2];
         continue;
       }
@@ -432,7 +532,8 @@ export function parseLogText(text: string): Doc {
           if (t.length !== 2) throw new ParseError(ln, "run 줄 형식: run 날짜");
           cur.run = true;
         } else {
-          if (t.length !== 3 || !isDayKey(t[2])) throw new ParseError(ln, `day 줄 형식: day 날짜 루틴 (${t.slice(2).join(" ")})`);
+          if (t.length !== 3) throw new ParseError(ln, `day 줄 형식: day 날짜 루틴 (${t.slice(2).join(" ")})`);
+          dayRefs.push({ ln, key: t[2] });
           cur.day = t[2];
         }
         continue;
@@ -480,6 +581,13 @@ export function parseLogText(text: string): Doc {
     });
     cur.entries.push({ id, sets });
   }
+  // 날 목록: rday 줄이 있으면 그대로. 없으면 0.6.0 key를 쓰는 파일은 그때 뜻대로, 아니면 기본 분할.
+  if (!doc.days.length) {
+    const legacy = dayRefs.length > 0 && dayRefs.every(r => LEGACY_DAYS.some(d => d.key === r.key));
+    doc.days = (legacy ? LEGACY_DAYS : DEFAULT_DAYS).map(d => ({ ...d }));
+    if (!doc.runDay) doc.runDay = legacy ? "legs" : DEFAULT_RUN_DAY; // 날 목록을 처음 정할 때만 기본 러닝 날도
+  }
+  for (const r of dayRefs) if (!doc.days.some(d => d.key === r.key)) throw new ParseError(r.ln, `모르는 루틴: ${r.key}`);
   return doc;
 }
 
@@ -497,5 +605,7 @@ export function defaultDoc(writtenAt: string = nowIso()): Doc {
       ex("pullup", "턱걸이"),
     ],
     sessions: [],
+    days: DEFAULT_DAYS.map(d => ({ ...d })),
+    runDay: DEFAULT_RUN_DAY,
   };
 }
