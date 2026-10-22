@@ -61,6 +61,7 @@ export class TlogView extends ItemView {
   calDay: string | null = null;  // 달력에서 누른 날짜
   dayPick: string | null = null; // 오늘 루틴을 칩으로 바꿨으면 그 날 key(그날만 유효)
   editingDays = false;           // 더보기: 루틴 날 편집
+  showOthers = false;            // 홈: 그 밖의 종목 펼침
   pickDate = false;              // 더보기: 지난 날짜 목록
   renaming = false;              // 더보기: 이름 입력칸
   adding = false;                // 홈: 새 종목 입력칸
@@ -203,11 +204,27 @@ export class TlogView extends ItemView {
     runBtn.disabled = this.busy || !!this.error;
     runBtn.onclick = () => void this.toggleRun(today, !ran, day);
 
-    // 오늘 한 운동: 기록한 순서대로 세트와 합계. 누르면 그 종목 화면(숨긴 종목은 보기만).
+    // 홈은 세 묶음: 오늘 한 운동(맨 위) / 오늘 루틴 중 아직 안 한 종목 / 그 밖의 종목(접힘).
+    // 오늘 한 종목은 맨 위에만 나오고 아래에서는 빠진다.
     const done = block?.entries.filter(e => e.sets.length) ?? [];
-    if (done.length) {
+    const doneIds = new Set(done.map(e => e.id));
+    const section = (title: string) => {
       const box = el.createDiv({ cls: "tlog-list" });
-      box.createDiv({ cls: "tlog-hist-title", text: `오늘 한 운동 · ${done.length}종목 ${sets}세트` });
+      box.createDiv({ cls: "tlog-hist-title", text: title });
+      return box;
+    };
+    const row = (box: HTMLElement, ex: Exercise) => {
+      const last = histOf(ex.id)[0];
+      const mode = modeOf(historyOf(doc.sessions, ex.id));
+      const r = box.createDiv({ cls: this.error ? "tlog-item" : "tlog-item is-link" });
+      r.createDiv({ cls: "tlog-item-main", text: `${ex.name} ›` });
+      r.createDiv({ cls: "tlog-sub", text: last ? `지난번 ${fmtShort(last.date)}: ${fmtSetsTotal(last.sets, mode)}` : "기록 없음" });
+      if (!this.error) r.onclick = () => this.enterLog(ex.id);
+    };
+
+    // 1. 오늘 한 운동: 기록한 순서대로 세트와 합계. 누르면 그 종목 화면(숨긴 종목은 보기만).
+    if (done.length) {
+      const box = section(`오늘 한 운동 · ${done.length}종목 ${sets}세트`);
       for (const en of done) {
         const exOf = doc.exercises.find(e => e.id === en.id);
         const mode = modeOf(historyOf(doc.sessions, en.id));
@@ -218,29 +235,29 @@ export class TlogView extends ItemView {
         if (open) r.onclick = () => this.enterLog(en.id);
       }
     }
-    el.createDiv({ cls: "tlog-note", text: list.length ? "종목을 누르면 기록 화면이 열립니다" : "종목이 없습니다. 아래에서 추가하세요." });
+    if (!list.length) el.createDiv({ cls: "tlog-note", text: "종목이 없습니다. 아래에서 추가하세요." });
+    const rest = list.filter(e => !doneIds.has(e.id));
 
-    // 종목 목록: 파일 순서. 루틴이 있으면 오늘 루틴 종목을 위에, 나머지는 아래 "그 밖의 종목"에.
-    // 오늘 세트가 있으면 "오늘:", 없으면 지난번 기록.
-    const listEl = el.createDiv({ cls: "tlog-list" });
-    const row = (ex: Exercise) => {
-      const todaySets = block?.entries.find(e => e.id === ex.id)?.sets ?? [];
-      const last = histOf(ex.id)[0];
-      const mode = modeOf(historyOf(doc.sessions, ex.id));
-      const r = listEl.createDiv({ cls: this.error ? "tlog-item" : "tlog-item is-link" });
-      r.createDiv({ cls: "tlog-item-main", text: `${ex.name} ›` });
-      r.createDiv({ cls: "tlog-sub", text: todaySets.length ? `오늘: ${fmtSetsTotal(todaySets, mode)}` : last ? `지난번 ${fmtShort(last.date)}: ${fmtSetsTotal(last.sets, mode)}` : "기록 없음" });
-      if (!this.error) r.onclick = () => this.enterLog(ex.id);
-    };
     if (day) {
+      // 2. 오늘 루틴 중 아직 안 한 종목(파일 순서).
       const mine = list.filter(e => e.routine === day);
-      listEl.createDiv({ cls: "tlog-hist-title", text: `오늘 · ${dayName(doc, day)}` });
-      if (!mine.length) listEl.createDiv({ cls: "tlog-note", text: "이 루틴에 넣은 종목이 없습니다. 러닝만 하는 날이면 위에서 러닝을 체크하세요." });
-      mine.forEach(row);
-      listEl.createDiv({ cls: "tlog-hist-title", text: "그 밖의 종목" });
-      list.filter(e => e.routine !== day).forEach(row);
-    } else {
-      list.forEach(row);
+      const todo = mine.filter(e => !doneIds.has(e.id));
+      const box = section(`오늘 루틴 · ${dayName(doc, day)}${mine.length ? ` · ${mine.length - todo.length}/${mine.length}` : ""}`);
+      if (!mine.length) box.createDiv({ cls: "tlog-note", text: "이 루틴에 넣은 종목이 없습니다. 러닝만 하는 날이면 위에서 러닝을 체크하세요." });
+      else if (!todo.length) box.createDiv({ cls: "tlog-note", text: "오늘 루틴 종목을 모두 기록했습니다" });
+      todo.forEach(ex => row(box, ex));
+      // 3. 그 밖의 종목: 접어 두고 누르면 펼친다.
+      const others = rest.filter(e => e.routine !== day);
+      if (others.length) {
+        const toggle = el.createEl("button", { cls: "tlog-link", text: this.showOthers ? "그 밖의 종목 접기" : `그 밖의 종목 ${others.length}개 ›` });
+        toggle.onclick = () => { this.showOthers = !this.showOthers; this.render(); };
+        if (this.showOthers) { const ob = el.createDiv({ cls: "tlog-list" }); others.forEach(ex => row(ob, ex)); }
+      }
+    } else if (rest.length) {
+      // 루틴을 아직 정하지 않았으면 남은 종목을 펼쳐 두고 안내만.
+      const box = section(done.length ? "다른 종목" : "종목");
+      rest.forEach(ex => row(box, ex));
+      el.createDiv({ cls: "tlog-note", text: "종목 화면 더보기에서 루틴을 정하면 오늘 할 종목만 묶어서 보여 줍니다" });
     }
 
     // 종목 추가 · 숨긴 종목 · 동기화
