@@ -62,6 +62,7 @@ export class TlogView extends ItemView {
   dayPick: string | null = null; // 오늘 루틴을 칩으로 바꿨으면 그 날 key(그날만 유효)
   editingDays = false;           // 더보기: 루틴 날 편집
   showOthers = false;            // 홈: 그 밖의 종목 펼침
+  homeCal = false;               // 홈: 달력 펼침
   pickDate = false;              // 더보기: 지난 날짜 목록
   renaming = false;              // 더보기: 이름 입력칸
   adding = false;                // 홈: 새 종목 입력칸
@@ -260,8 +261,10 @@ export class TlogView extends ItemView {
       el.createDiv({ cls: "tlog-note", text: "종목 화면 더보기에서 루틴을 정하면 오늘 할 종목만 묶어서 보여 줍니다" });
     }
 
-    // 종목 추가 · 숨긴 종목 · 동기화
+    // 달력 · 종목 추가 · 숨긴 종목 · 동기화
     const links = el.createDiv({ cls: "tlog-links" });
+    const calLink = links.createEl("button", { cls: "tlog-link", text: this.homeCal ? "달력 닫기" : "달력" });
+    calLink.onclick = () => { this.homeCal = !this.homeCal; this.calMonth = monthKey(today); this.calDay = null; this.render(); };
     const addLink = links.createEl("button", { cls: "tlog-link", text: this.adding ? "추가 취소" : "+ 종목 추가" });
     addLink.disabled = !!this.error;
     addLink.onclick = () => { this.adding = !this.adding; this.showHidden = false; this.render(); };
@@ -272,6 +275,7 @@ export class TlogView extends ItemView {
     const sync = links.createEl("button", { cls: "tlog-link", text: "동기화" });
     sync.disabled = !!this.error;
     sync.onclick = () => { this.plugin.sync(); };
+    if (this.homeCal) this.renderCalendar(el, doc, null, today);
     if (this.adding) {
       const form = el.createDiv({ cls: "tlog-newex" });
       const nameIn = form.createEl("input", { cls: "tlog-nameinput", type: "text", placeholder: "종목 이름 (예: 레그프레스)" });
@@ -791,10 +795,11 @@ export class TlogView extends ItemView {
   }
 
   /**
-   * 기록 보기 → 달력. 운동한 날은 점, 이 종목을 한 날은 강조. 날짜를 누르면 그날 종목·합계가 아래에 나오고,
-   * 종목을 누르면 그 날짜의 기록 화면(오늘이면 평소 화면)으로 간다. 안 한 날에도 이 종목을 넣을 수 있다. 미래 날짜는 못 누른다.
+   * 달력(홈의 "달력", 또는 종목 화면의 기록 보기). 운동한 날은 점, 러닝한 날은 밑줄, 종목 화면에서 열면 그 종목을 한 날은 강조.
+   * 날짜를 누르면 그날 종목·합계와 러닝 체크가 아래에 나오고, 종목을 누르면 그 날짜의 기록 화면(오늘이면 평소 화면)으로 간다.
+   * 종목 화면에서 열었으면 안 한 날에도 그 종목을 넣을 수 있다. 미래 날짜는 못 누른다.
    */
-  private renderCalendar(el: HTMLElement, doc: Doc, ex: Exercise, today: string): void {
+  private renderCalendar(el: HTMLElement, doc: Doc, ex: Exercise | null, today: string): void {
     const month = this.calMonth || monthKey(today);
     const byDate = new Map(doc.sessions.map(s => [s.date, s] as [string, Session]));
     const box = el.createDiv({ cls: "tlog-cal" });
@@ -813,7 +818,7 @@ export class TlogView extends ItemView {
         const cell = grid.createEl("button", { cls: "tlog-cal-day", text: String(Number(d.slice(8, 10))) });
         if (monthKey(d) !== month) cell.addClass("is-other");
         if (s) cell.addClass("has-session");
-        if (s?.entries.some(e => e.id === ex.id)) cell.addClass("has-ex");
+        if (ex && s?.entries.some(e => e.id === ex.id)) cell.addClass("has-ex");
         if (s?.run) cell.addClass("has-run");
         if (d === today) cell.addClass("is-today");
         if (d === this.calDay) cell.addClass("is-selected");
@@ -821,7 +826,7 @@ export class TlogView extends ItemView {
         cell.onclick = () => { this.calDay = this.calDay === d ? null : d; this.render(); };
       }
     }
-    box.createDiv({ cls: "tlog-note", text: `● 운동한 날 · 굵게 = ${ex.name} · 밑줄 = 러닝` });
+    box.createDiv({ cls: "tlog-note", text: ex ? `● 운동한 날 · 굵게 = ${ex.name} · 밑줄 = 러닝` : "● 운동한 날 · 밑줄 = 러닝 · 날짜를 누르면 그날 기록과 러닝 체크" });
     if (!this.calDay) return;
 
     // 누른 날짜: 그날 종목과 합계. 누르면 그 날짜·그 종목의 기록 화면으로.
@@ -842,7 +847,7 @@ export class TlogView extends ItemView {
     const runBtn = panel.createEl("button", { cls: ran ? "tlog-run is-on" : "tlog-run", text: ran ? "러닝 ✓" : "러닝 ☐" });
     runBtn.disabled = this.busy;
     runBtn.onclick = () => void this.toggleRun(day, !ran, day === today ? this.shownDay(doc, today) : null);
-    if (!s?.entries.some(e => e.id === ex.id)) {
+    if (ex && !s?.entries.some(e => e.id === ex.id)) {
       const add = panel.createEl("button", { cls: "tlog-link", text: `+ 이 날에 ${ex.name} 기록` });
       add.disabled = this.busy;
       add.onclick = () => go(ex.id);
