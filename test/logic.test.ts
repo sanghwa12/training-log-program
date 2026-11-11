@@ -4,7 +4,7 @@ import {
   localDate, localTime, daysBetween, shiftDate, weekStart, weekday, shiftMonth, monthWeeks, volume, fmtVol, modeOf, measure, fmtMeasure, fmtSet, totalReps, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
   todayBlock, sessionAt, visibleExercises, lastEntryId, toLogText, parseLogText, defaultDoc, newExercise, slugId, removeExercise, restoreExercise,
   renameExercise, setStep, stepOf, DEFAULT_STEP, ParseError,
-  DEFAULT_DAYS, LEGACY_DAYS, dayName, nextDay, nextAfter, setRoutine, setRunDay, sessionDay, todayDay, setRun, addDay, renameDay, moveDay, removeDay,
+  DEFAULT_DAYS, LEGACY_DAYS, ANY_NAME, setAnyDay, lastDone, stalestFirst, dayName, nextDay, nextAfter, setRoutine, setRunDay, sessionDay, todayDay, setRun, addDay, renameDay, moveDay, removeDay,
 } from "../src/logic.ts";
 import type { SetRec, Doc, HistItem, Session } from "../src/logic.ts";
 
@@ -111,6 +111,52 @@ function routineDoc(): Doc {
   return doc;
 }
 
+test("stalestFirst: 한 번도 안 한 종목 먼저, 그다음 오래된 순, 같으면 파일 순서; 기준 날짜 이후 기록은 안 봄", () => {
+  const doc = defaultDoc("x"); // squat bench row deadlift ohp pullup
+  doc.sessions = [
+    { date: "2026-11-01", time: null, entries: [{ id: "squat", sets: S("60x5") }, { id: "row", sets: S("40x8") }] },
+    { date: "2026-11-03", time: null, entries: [{ id: "bench", sets: S("40x8") }] },
+    { date: "2026-11-05", time: null, entries: [{ id: "squat", sets: S("60x5") }] },
+    { date: "2026-11-11", time: null, entries: [{ id: "row", sets: S("40x8") }] }, // 오늘
+  ];
+  assert.equal(lastDone(doc, "squat", "2026-11-11"), "2026-11-05");
+  assert.equal(lastDone(doc, "row", "2026-11-11"), "2026-11-01"); // 오늘 기록은 빼고
+  assert.equal(lastDone(doc, "ohp", "2026-11-11"), null);
+  const order = (ids: string[]) => stalestFirst(doc, doc.exercises.filter(e => ids.includes(e.id)), "2026-11-11").map(e => e.id);
+  assert.deepEqual(order(["squat", "bench", "row", "ohp", "pullup"]), ["ohp", "pullup", "row", "bench", "squat"]);
+  assert.deepEqual(stalestFirst(doc, [], "2026-11-11"), []);
+  assert.deepEqual(doc.exercises.map(e => e.id), ["squat", "bench", "row", "deadlift", "ohp", "pullup"]); // 원본 순서는 그대로
+});
+test("기타·종합(anyday): 루틴 날과 함께 쓰지 않음, 순환에 끼지 않음, 줄 왕복, 형식 거부", () => {
+  const doc = routineDoc(); // bench·row d1, squat d2, ohp d3
+  assert.equal(ANY_NAME, "기타·종합");
+  assert.equal(setAnyDay(doc, "nope", true), false);
+  assert.equal(setAnyDay(doc, "deadlift", true), true);
+  assert.equal(setAnyDay(doc, "row", true), true); // 루틴에 있던 종목을 옮기면 루틴 지정이 풀림
+  const row = doc.exercises.find(e => e.id === "row")!;
+  assert.deepEqual([row.any, row.routine], [true, undefined]);
+  // 기타·종합만 한 날은 어느 루틴 날도 아니라 순서에 영향 없음
+  doc.sessions = [
+    { date: "2026-11-08", time: null, entries: [{ id: "bench", sets: S("60x8") }] },
+    { date: "2026-11-09", time: null, entries: [{ id: "deadlift", sets: S("80x5 80x5") }] },
+  ];
+  assert.equal(sessionDay(doc, doc.sessions[1]), null);
+  assert.equal(todayDay(doc, "2026-11-11"), "d2");
+  // 가슴·등 + 데드리프트를 같이 해도 그날은 가슴·등
+  assert.equal(sessionDay(doc, { date: "x", time: null, entries: [{ id: "deadlift", sets: S("80x5 80x5 80x5") }, { id: "bench", sets: S("60x8") }] }), "d1");
+  const text = toLogText(doc);
+  assert.ok(text.includes("\n%% ex row 바벨로우 %%\n%% anyday row %%\n%% ex deadlift 데드리프트 %%\n%% anyday deadlift %%\n"));
+  assert.deepEqual(parseLogText(text), doc);
+  // 다시 루틴 날로 옮기면 기타·종합에서 빠짐
+  assert.equal(setRoutine(doc, "row", "d3"), true);
+  assert.deepEqual([row.any, row.routine], [undefined, "d3"]);
+  assert.equal(setAnyDay(doc, "deadlift", false), true);
+  assert.ok(!toLogText(doc).includes("anyday"));
+  rejects(HEAD + "%% anyday bench %%\n", 3, /anyday 줄 형식/);
+  rejects(HEAD + "%% anyday squat x %%\n", 3, /anyday 줄 형식/);
+  rejects(HEAD + "2026-09-07 session\n%% anyday squat %%\n", 4, /기록보다 앞/);
+  assert.equal(parseLogText(HEAD + "%% routine squat d1 %%\n%% anyday squat %%\n").exercises[0].routine, undefined);
+});
 test("기본 분할: 가슴·등 → 하체 → 어깨·팔, 다음 날·이름, 없는 날은 지정 안 됨", () => {
   const doc = defaultDoc("x");
   assert.deepEqual(doc.days, [{ key: "d1", name: "가슴·등" }, { key: "d2", name: "하체" }, { key: "d3", name: "어깨·팔" }]);

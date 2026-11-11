@@ -6,7 +6,7 @@ import type { WorkspaceLeaf } from "obsidian";
 import type TlogPlugin from "./main.ts";
 import {
   LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, monthKey, shiftMonth, monthWeeks, modeOf, measure, fmtMeasure, fmtSet, historyOf, hints, weeklyTrend, monthlyTrend,
-  todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, dayName, todayDay, setRoutine, setRun, setRunDay, addDay, renameDay, moveDay, removeDay, ParseError,
+  todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, dayName, todayDay, setRoutine, setRun, setRunDay, setAnyDay, stalestFirst, ANY_NAME, addDay, renameDay, moveDay, removeDay, ParseError,
 } from "./logic.ts";
 import type { Doc, Exercise, Session, SetRec, HistItem, Mode } from "./logic.ts";
 import { readDoc, updateDoc, logFile } from "./store.ts";
@@ -205,7 +205,7 @@ export class TlogView extends ItemView {
     runBtn.disabled = this.busy || !!this.error;
     runBtn.onclick = () => void this.toggleRun(today, !ran, day);
 
-    // 홈은 세 묶음: 오늘 한 운동(맨 위) / 오늘 루틴 중 아직 안 한 종목 / 그 밖의 종목(접힘).
+    // 홈 묶음: 오늘 한 운동(맨 위) / 오늘 루틴 중 아직 안 한 종목 / 기타·종합(아무 날) / 그 밖의 종목(접힘).
     // 오늘 한 종목은 맨 위에만 나오고 아래에서는 빠진다.
     const done = block?.entries.filter(e => e.sets.length) ?? [];
     const doneIds = new Set(done.map(e => e.id));
@@ -240,15 +240,21 @@ export class TlogView extends ItemView {
     const rest = list.filter(e => !doneIds.has(e.id));
 
     if (day) {
-      // 2. 오늘 루틴 중 아직 안 한 종목(파일 순서).
+      // 2. 오늘 루틴 중 아직 안 한 종목. 최근에 안 한 순(한 번도 안 한 종목 먼저).
       const mine = list.filter(e => e.routine === day);
-      const todo = mine.filter(e => !doneIds.has(e.id));
+      const todo = stalestFirst(doc, mine.filter(e => !doneIds.has(e.id)), today);
       const box = section(`오늘 루틴 · ${dayName(doc, day)}${mine.length ? ` · ${mine.length - todo.length}/${mine.length}` : ""}`);
       if (!mine.length) box.createDiv({ cls: "tlog-note", text: "이 루틴에 넣은 종목이 없습니다. 러닝만 하는 날이면 위에서 러닝을 체크하세요." });
       else if (!todo.length) box.createDiv({ cls: "tlog-note", text: "오늘 루틴 종목을 모두 기록했습니다" });
       todo.forEach(ex => row(box, ex));
-      // 3. 그 밖의 종목: 접어 두고 누르면 펼친다.
-      const others = rest.filter(e => e.routine !== day);
+      // 3. 기타·종합: 어느 날에나 하는 종목 중 오늘 아직 안 한 것. 역시 최근에 안 한 순.
+      const anyTodo = stalestFirst(doc, rest.filter(e => e.any), today);
+      if (anyTodo.length) {
+        const ab = section(`${ANY_NAME} · 아무 날`);
+        anyTodo.forEach(ex => row(ab, ex));
+      }
+      // 4. 그 밖의 종목: 접어 두고 누르면 펼친다.
+      const others = rest.filter(e => e.routine !== day && !e.any);
       if (others.length) {
         const toggle = el.createEl("button", { cls: "tlog-link", text: this.showOthers ? "그 밖의 종목 접기" : `그 밖의 종목 ${others.length}개 ›` });
         toggle.onclick = () => { this.showOthers = !this.showOthers; this.render(); };
@@ -335,8 +341,11 @@ export class TlogView extends ItemView {
     const editingPast = date !== today;
     const block = editingPast ? doc.sessions.find(s => s.date === date) ?? null : todayBlk;
     const { lastDate, histOf } = pastOf(doc, date);
-    // "다음 ›"과 n/N: 루틴에 넣은 종목이면 같은 루틴 안에서, 아니면 전체 목록에서.
-    const list = visibleExercises(doc).filter(e => !ex.routine || e.routine === ex.routine);
+    // "다음 ›"과 n/N: 루틴 종목이면 같은 루틴 안에서, 기타·종합이면 그 안에서(둘 다 홈과 같은 최근에 안 한 순), 아니면 전체 목록(파일 순서).
+    const all = visibleExercises(doc);
+    const list = ex.any ? stalestFirst(doc, all.filter(e => e.any), date)
+      : ex.routine ? stalestFirst(doc, all.filter(e => e.routine === ex.routine), date)
+      : all;
     const idx = list.findIndex(e => e.id === ex.id);
     const nextEx: Exercise | null = idx >= 0 && idx + 1 < list.length ? list[idx + 1] : null;
     const sets = block?.entries.find(e => e.id === ex.id)?.sets ?? [];
@@ -443,12 +452,21 @@ export class TlogView extends ItemView {
       // 루틴: 이 종목을 어느 날에 할지. 누르면 바로 저장되고 홈의 "오늘" 묶음이 따라간다.
       const routineRow = menu.createDiv({ cls: "tlog-today" });
       routineRow.createSpan({ cls: "tlog-today-label", text: "루틴" });
-      for (const d of [...doc.days.map(x => ({ key: x.key as string | null, name: x.name })), { key: null, name: "없음" }]) {
+      for (const d of doc.days) {
         const b = routineRow.createEl("button", { cls: "tlog-setbtn", text: d.name });
-        if ((ex.routine ?? null) === d.key) b.addClass("is-selected");
+        if (ex.routine === d.key) b.addClass("is-selected");
         b.disabled = this.busy;
         b.onclick = () => void this.setRoutine(ex.id, d.key);
       }
+      // 기타·종합: 어느 날에나 하는 종목(순환에 끼지 않음). 없음: 어느 묶음에도 넣지 않음.
+      const anyBtn = routineRow.createEl("button", { cls: "tlog-setbtn", text: ANY_NAME });
+      if (ex.any) anyBtn.addClass("is-selected");
+      anyBtn.disabled = this.busy;
+      anyBtn.onclick = () => void this.setRoutine(ex.id, "any");
+      const noneBtn = routineRow.createEl("button", { cls: "tlog-setbtn", text: "없음" });
+      if (!ex.any && !ex.routine) noneBtn.addClass("is-selected");
+      noneBtn.disabled = this.busy;
+      noneBtn.onclick = () => void this.setRoutine(ex.id, null);
       const editBtn = routineRow.createEl("button", { cls: "tlog-link", text: this.editingDays ? "편집 닫기" : "날 편집" });
       editBtn.onclick = () => { this.editingDays = !this.editingDays; this.render(); };
       if (this.editingDays) this.renderDayEditor(menu, doc);
@@ -748,13 +766,16 @@ export class TlogView extends ItemView {
     await this.load();
   }
 
-  /** 종목의 루틴 날을 저장한다. null이면 루틴에서 뺀다. */
+  /** 종목의 묶음을 저장한다. 날 key면 그 루틴 날, "any"면 기타·종합, null이면 어느 묶음에도 넣지 않는다. */
   private async setRoutine(id: string, key: string | null): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     this.render();
     try {
-      await updateDoc(this.app, (doc) => { if (!setRoutine(doc, id, key)) throw new Error("그 종목이 이미 없습니다"); });
+      await updateDoc(this.app, (doc) => {
+        const ok = key === "any" ? setAnyDay(doc, id, true) : setAnyDay(doc, id, false) && setRoutine(doc, id, key);
+        if (!ok) throw new Error("그 종목이 이미 없습니다");
+      });
       this.plugin.lastWriteAt = Date.now();
     } catch (e) {
       new Notice(e instanceof ParseError ? `${LOG_PATH} ${e.message}` : `루틴 저장 실패: ${String(e)}`);
