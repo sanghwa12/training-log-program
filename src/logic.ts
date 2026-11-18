@@ -13,11 +13,13 @@ export const DEFAULT_STEP = 2.5; // 무게 칸을 정하지 않은 종목의 −
 /** 종목. 템플릿(A/B) 구분은 없다 — 오늘 할 종목은 사용자가 그때그때 고른다. hidden이면 목록에서만 뺀다(기록은 유지). */
 /** step = 그 기계의 무게 칸(kg). 없으면 DEFAULT_STEP. 파일에는 `%% step id kg %%` 줄로.
  *  routine = 이 종목이 속한 루틴 날. 파일에는 `%% routine id key %%` 줄로. */
-export type Exercise = { id: string; name: string; hidden: boolean; step?: number; routine?: string; any?: boolean; check?: boolean };
+export type Exercise = { id: string; name: string; hidden: boolean; step?: number; routine?: string; any?: boolean; hybrid?: boolean; check?: boolean };
 /** any = 기타·종합: 어느 날에나 하는 종목(데드리프트, 복근 등). 순환에는 끼지 않는다. routine과 함께 쓰지 않는다. 파일에는 `%% anyday id %%`.
+ *  hybrid = 하이브리드: 기타·종합과 같은 방식의 또 하나의 묶음(하이록스 등). routine·any와 함께 쓰지 않는다. 파일에는 `%% hybrid id %%`.
  *  check = 했다·안 했다만 기록하는 종목(하이록스 등). 한 날의 기록 줄은 `0x1` 한 세트(DONE_SET). 파일에는 `%% check id %%`. */
 export const DONE_SET: SetRec = { kg: 0, reps: 1 };
 export const ANY_NAME = "기타·종합";
+export const HYBRID_NAME = "하이브리드";
 export type SetRec = { kg: number; reps: number };
 export type Entry = { id: string; sets: SetRec[] };
 /** 하루 = 세션 하나. time은 첫 세트를 찍은 시각. run = 러닝 했음(`%% run 날짜 %%`),
@@ -306,7 +308,7 @@ export function setStep(doc: Doc, id: string, kg: number): boolean {
 export function setRoutine(doc: Doc, id: string, key: string | null): boolean {
   const ex = doc.exercises.find(e => e.id === id);
   if (!ex || (key && !doc.days.some(d => d.key === key))) return false;
-  if (key) { ex.routine = key; delete ex.any; } else delete ex.routine;
+  if (key) { ex.routine = key; delete ex.any; delete ex.hybrid; } else delete ex.routine;
   return true;
 }
 
@@ -314,7 +316,15 @@ export function setRoutine(doc: Doc, id: string, key: string | null): boolean {
 export function setAnyDay(doc: Doc, id: string, on: boolean): boolean {
   const ex = doc.exercises.find(e => e.id === id);
   if (!ex) return false;
-  if (on) { ex.any = true; delete ex.routine; } else delete ex.any;
+  if (on) { ex.any = true; delete ex.routine; delete ex.hybrid; } else delete ex.any;
+  return true;
+}
+
+/** 종목을 하이브리드 묶음(어느 날에나)으로 넣거나 뺀다. 넣으면 루틴 날·기타·종합 지정은 풀린다. 모르는 id는 false. */
+export function setHybrid(doc: Doc, id: string, on: boolean): boolean {
+  const ex = doc.exercises.find(e => e.id === id);
+  if (!ex) return false;
+  if (on) { ex.hybrid = true; delete ex.routine; delete ex.any; } else delete ex.hybrid;
   return true;
 }
 
@@ -514,6 +524,7 @@ export function toLogText(doc: Doc): string {
     if (e.step != null) lines.push(`%% step ${e.id} ${fmtKg(e.step)} %%`);
     if (e.routine) lines.push(`%% routine ${e.id} ${e.routine} %%`);
     if (e.any) lines.push(`%% anyday ${e.id} %%`);
+    if (e.hybrid) lines.push(`%% hybrid ${e.id} %%`);
     if (e.check) lines.push(`%% check ${e.id} %%`);
   }
   for (const s of doc.sessions) {
@@ -557,7 +568,7 @@ export function parseLogText(text: string): Doc {
       if (line.length < 4 || !line.endsWith("%%")) throw new ParseError(ln, "닫는 %% 가 없음");
       const body = line.slice(2, -2).trim();
       const kw = body.split(/\s+/)[0];
-      if (!["ex", "hidden", "step", "routine", "day", "run", "rday", "runday", "anyday", "check"].includes(kw)) continue; // 그 밖의 주석은 무시
+      if (!["ex", "hidden", "step", "routine", "day", "run", "rday", "runday", "anyday", "hybrid", "check"].includes(kw)) continue; // 그 밖의 주석은 무시
       const t = body.split(/\s+/);
       if (kw === "check") { // %% check id %% — 그 종목 줄 뒤, 기록 앞
         if (cur) throw new ParseError(ln, "check 줄은 기록보다 앞에 있어야 함");
@@ -572,6 +583,16 @@ export function parseLogText(text: string): Doc {
         if (t.length !== 2 || !ex) throw new ParseError(ln, "anyday 줄 형식: anyday id (그 종목 줄 뒤에)");
         ex.any = true;
         delete ex.routine;
+        delete ex.hybrid;
+        continue;
+      }
+      if (kw === "hybrid") { // %% hybrid id %% — 그 종목 줄 뒤, 기록 앞
+        if (cur) throw new ParseError(ln, "hybrid 줄은 기록보다 앞에 있어야 함");
+        const ex = doc.exercises.find(e => e.id === t[1]);
+        if (t.length !== 2 || !ex) throw new ParseError(ln, "hybrid 줄 형식: hybrid id (그 종목 줄 뒤에)");
+        ex.hybrid = true;
+        delete ex.routine;
+        delete ex.any;
         continue;
       }
       if (kw === "runday") { // %% runday key %% — 기록 앞
@@ -595,6 +616,7 @@ export function parseLogText(text: string): Doc {
         dayRefs.push({ ln, key: t[2] });
         ex.routine = t[2];
         delete ex.any;
+        delete ex.hybrid;
         continue;
       }
       if (kw === "day" || kw === "run") { // %% day 날짜 key %% / %% run 날짜 %% — 그 날짜의 session 줄 뒤

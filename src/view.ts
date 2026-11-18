@@ -6,7 +6,7 @@ import type { WorkspaceLeaf } from "obsidian";
 import type TlogPlugin from "./main.ts";
 import {
   LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, monthKey, shiftMonth, monthWeeks, modeOf, measure, fmtMeasure, fmtSet, historyOf, hints, weeklyTrend, monthlyTrend,
-  todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, dayName, todayDay, setRoutine, setRun, setRunDay, setAnyDay, setCheck, setDone, stalestFirst, ANY_NAME, addDay, renameDay, moveDay, removeDay, ParseError,
+  todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, dayName, todayDay, setRoutine, setRun, setRunDay, setAnyDay, setHybrid, setCheck, setDone, stalestFirst, ANY_NAME, HYBRID_NAME, addDay, renameDay, moveDay, removeDay, ParseError,
 } from "./logic.ts";
 import type { Doc, Exercise, Session, SetRec, HistItem, Mode } from "./logic.ts";
 import { readDoc, updateDoc, logFile } from "./store.ts";
@@ -214,7 +214,7 @@ export class TlogView extends ItemView {
     runBtn.disabled = this.busy || !!this.error;
     runBtn.onclick = () => void this.toggleRun(today, !ran, day);
 
-    // 홈 묶음: 오늘 한 운동(맨 위) / 오늘 루틴 중 아직 안 한 종목 / 기타·종합(아무 날) / 그 밖의 종목(접힘).
+    // 홈 묶음: 오늘 한 운동(맨 위) / 오늘 루틴 중 아직 안 한 종목 / 기타·종합·하이브리드(아무 날) / 그 밖의 종목(접힘).
     // 오늘 한 종목은 맨 위에만 나오고 아래에서는 빠진다.
     const done = block?.entries.filter(e => e.sets.length) ?? [];
     const doneIds = new Set(done.map(e => e.id));
@@ -254,14 +254,14 @@ export class TlogView extends ItemView {
       if (!mine.length) box.createDiv({ cls: "tlog-note", text: "이 루틴에 넣은 종목이 없습니다. 러닝만 하는 날이면 위에서 러닝을 체크하세요." });
       else if (!todo.length) box.createDiv({ cls: "tlog-note", text: "오늘 루틴 종목을 모두 기록했습니다" });
       todo.forEach(ex => row(box, ex));
-      // 3. 기타·종합: 어느 날에나 하는 종목 중 오늘 아직 안 한 것. 역시 최근에 안 한 순.
-      const anyTodo = stalestFirst(doc, rest.filter(e => e.any), today);
-      if (anyTodo.length) {
-        const ab = section(ANY_NAME, "아무 날");
-        anyTodo.forEach(ex => row(ab, ex));
+      // 3. 기타·종합, 하이브리드: 어느 날에나 하는 종목 중 오늘 아직 안 한 것. 역시 최근에 안 한 순.
+      for (const [name, exs] of [[ANY_NAME, rest.filter(e => e.any)], [HYBRID_NAME, rest.filter(e => e.hybrid)]] as [string, Exercise[]][]) {
+        if (!exs.length) continue;
+        const ab = section(name, "아무 날");
+        stalestFirst(doc, exs, today).forEach(ex => row(ab, ex));
       }
       // 4. 그 밖의 종목: 접어 두고 누르면 펼친다.
-      const others = rest.filter(e => e.routine !== day && !e.any);
+      const others = rest.filter(e => e.routine !== day && !e.any && !e.hybrid);
       if (others.length) {
         const toggle = el.createEl("button", { cls: "tlog-link tlog-disclosure", text: this.showOthers ? "그 밖의 종목 접기 ⌃" : `그 밖의 종목 ${others.length}개 ›` });
         toggle.setAttribute("aria-expanded", String(this.showOthers));
@@ -372,9 +372,10 @@ export class TlogView extends ItemView {
     const editingPast = date !== today;
     const block = editingPast ? doc.sessions.find(s => s.date === date) ?? null : todayBlk;
     const { lastDate, histOf } = pastOf(doc, date);
-    // "다음 ›"과 n/N: 루틴 종목이면 같은 루틴 안에서, 기타·종합이면 그 안에서(둘 다 홈과 같은 최근에 안 한 순), 아니면 전체 목록(파일 순서).
+    // "다음 ›"과 n/N: 루틴 종목이면 같은 루틴 안에서, 기타·종합·하이브리드면 그 안에서(모두 홈과 같은 최근에 안 한 순), 아니면 전체 목록(파일 순서).
     const all = visibleExercises(doc);
     const list = ex.any ? stalestFirst(doc, all.filter(e => e.any), date)
+      : ex.hybrid ? stalestFirst(doc, all.filter(e => e.hybrid), date)
       : ex.routine ? stalestFirst(doc, all.filter(e => e.routine === ex.routine), date)
       : all;
     const idx = list.findIndex(e => e.id === ex.id);
@@ -517,13 +518,15 @@ export class TlogView extends ItemView {
         b.disabled = this.busy;
         b.onclick = () => void this.setRoutine(ex.id, d.key);
       }
-      // 기타·종합: 어느 날에나 하는 종목(순환에 끼지 않음). 없음: 어느 묶음에도 넣지 않음.
-      const anyBtn = routineRow.createEl("button", { cls: "tlog-setbtn", text: ANY_NAME });
-      if (ex.any) anyBtn.addClass("is-selected");
-      anyBtn.disabled = this.busy;
-      anyBtn.onclick = () => void this.setRoutine(ex.id, "any");
+      // 기타·종합, 하이브리드: 어느 날에나 하는 종목(순환에 끼지 않음). 없음: 어느 묶음에도 넣지 않음.
+      for (const [key, name, on] of [["any", ANY_NAME, !!ex.any], ["hybrid", HYBRID_NAME, !!ex.hybrid]] as [string, string, boolean][]) {
+        const b = routineRow.createEl("button", { cls: "tlog-setbtn", text: name });
+        if (on) b.addClass("is-selected");
+        b.disabled = this.busy;
+        b.onclick = () => void this.setRoutine(ex.id, key);
+      }
       const noneBtn = routineRow.createEl("button", { cls: "tlog-setbtn", text: "없음" });
-      if (!ex.any && !ex.routine) noneBtn.addClass("is-selected");
+      if (!ex.any && !ex.hybrid && !ex.routine) noneBtn.addClass("is-selected");
       noneBtn.disabled = this.busy;
       noneBtn.onclick = () => void this.setRoutine(ex.id, null);
       const editBtn = routineRow.createEl("button", { cls: "tlog-link", text: this.editingDays ? "편집 닫기" : "날 편집" });
@@ -880,14 +883,15 @@ export class TlogView extends ItemView {
     await this.load();
   }
 
-  /** 종목의 묶음을 저장한다. 날 key면 그 루틴 날, "any"면 기타·종합, null이면 어느 묶음에도 넣지 않는다. */
+  /** 종목의 묶음을 저장한다. 날 key면 그 루틴 날, "any"면 기타·종합, "hybrid"면 하이브리드, null이면 어느 묶음에도 넣지 않는다. */
   private async setRoutine(id: string, key: string | null): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     this.render();
     try {
       await updateDoc(this.app, (doc) => {
-        const ok = key === "any" ? setAnyDay(doc, id, true) : setAnyDay(doc, id, false) && setRoutine(doc, id, key);
+        const ok = key === "any" ? setAnyDay(doc, id, true) : key === "hybrid" ? setHybrid(doc, id, true)
+          : setAnyDay(doc, id, false) && setHybrid(doc, id, false) && setRoutine(doc, id, key);
         if (!ok) throw new Error("그 종목이 이미 없습니다");
       });
       this.plugin.lastWriteAt = Date.now();
@@ -1001,7 +1005,8 @@ export class TlogView extends ItemView {
     const groups: [string, Exercise[]][] = [
       ...doc.days.map(d => [d.name, addable.filter(e => e.routine === d.key)] as [string, Exercise[]]),
       [ANY_NAME, addable.filter(e => e.any)],
-      ["그 밖의 종목", addable.filter(e => !e.any && !doc.days.some(d => d.key === e.routine))],
+      [HYBRID_NAME, addable.filter(e => e.hybrid)],
+      ["그 밖의 종목", addable.filter(e => !e.any && !e.hybrid && !doc.days.some(d => d.key === e.routine))],
     ];
     for (const [name, exs] of groups) {
       if (!exs.length) continue;

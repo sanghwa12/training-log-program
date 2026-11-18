@@ -4,7 +4,7 @@ import {
   localDate, localTime, daysBetween, shiftDate, weekStart, weekday, shiftMonth, monthWeeks, volume, fmtVol, modeOf, measure, fmtMeasure, fmtSet, totalReps, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
   todayBlock, sessionAt, visibleExercises, lastEntryId, toLogText, parseLogText, defaultDoc, newExercise, slugId, removeExercise, restoreExercise,
   renameExercise, setStep, stepOf, DEFAULT_STEP, ParseError,
-  DEFAULT_DAYS, LEGACY_DAYS, ANY_NAME, setAnyDay, setCheck, setDone, DONE_SET, lastDone, stalestFirst, dayName, nextDay, nextAfter, setRoutine, setRunDay, sessionDay, todayDay, setRun, addDay, renameDay, moveDay, removeDay,
+  DEFAULT_DAYS, LEGACY_DAYS, ANY_NAME, HYBRID_NAME, setAnyDay, setHybrid, setCheck, setDone, DONE_SET, lastDone, stalestFirst, dayName, nextDay, nextAfter, setRoutine, setRunDay, sessionDay, todayDay, setRun, addDay, renameDay, moveDay, removeDay,
 } from "../src/logic.ts";
 import type { SetRec, Doc, HistItem, Session } from "../src/logic.ts";
 
@@ -156,6 +156,39 @@ test("기타·종합(anyday): 루틴 날과 함께 쓰지 않음, 순환에 끼�
   rejects(HEAD + "%% anyday squat x %%\n", 3, /anyday 줄 형식/);
   rejects(HEAD + "2026-09-07 session\n%% anyday squat %%\n", 4, /기록보다 앞/);
   assert.equal(parseLogText(HEAD + "%% routine squat d1 %%\n%% anyday squat %%\n").exercises[0].routine, undefined);
+});
+test("하이브리드(hybrid): 루틴 날·기타·종합과 함께 쓰지 않음, 순환에 끼지 않음, 줄 왕복, 형식 거부", () => {
+  const doc = routineDoc(); // bench·row d1, squat d2, ohp d3
+  assert.equal(HYBRID_NAME, "하이브리드");
+  assert.equal(setHybrid(doc, "nope", true), false);
+  assert.equal(setAnyDay(doc, "deadlift", true), true);
+  assert.equal(setHybrid(doc, "deadlift", true), true); // 기타·종합에서 옮기면 기타·종합이 풀림
+  assert.equal(setHybrid(doc, "row", true), true);      // 루틴에 있던 종목을 옮기면 루틴 지정이 풀림
+  const row = doc.exercises.find(e => e.id === "row")!;
+  const dl = doc.exercises.find(e => e.id === "deadlift")!;
+  assert.deepEqual([row.hybrid, row.routine, dl.hybrid, dl.any], [true, undefined, true, undefined]);
+  // 하이브리드만 한 날은 어느 루틴 날도 아니라 순서에 영향 없음
+  doc.sessions = [
+    { date: "2026-11-08", time: null, entries: [{ id: "bench", sets: S("60x8") }] },
+    { date: "2026-11-09", time: null, entries: [{ id: "deadlift", sets: S("0x1") }] },
+  ];
+  assert.equal(sessionDay(doc, doc.sessions[1]), null);
+  assert.equal(todayDay(doc, "2026-11-11"), "d2");
+  const text = toLogText(doc);
+  assert.ok(text.includes("\n%% ex row 바벨로우 %%\n%% hybrid row %%\n%% ex deadlift 데드리프트 %%\n%% hybrid deadlift %%\n"));
+  assert.ok(!text.includes("anyday"));
+  assert.deepEqual(parseLogText(text), doc);
+  // 기타·종합이나 루틴 날로 옮기면 하이브리드에서 빠짐
+  assert.equal(setAnyDay(doc, "deadlift", true), true);
+  assert.deepEqual([dl.hybrid, dl.any], [undefined, true]);
+  assert.equal(setRoutine(doc, "row", "d3"), true);
+  assert.deepEqual([row.hybrid, row.routine], [undefined, "d3"]);
+  assert.ok(!toLogText(doc).includes("hybrid"));
+  rejects(HEAD + "%% hybrid bench %%\n", 3, /hybrid 줄 형식/);
+  rejects(HEAD + "%% hybrid squat x %%\n", 3, /hybrid 줄 형식/);
+  rejects(HEAD + "2026-09-07 session\n%% hybrid squat %%\n", 4, /기록보다 앞/);
+  const both = parseLogText(HEAD + "%% anyday squat %%\n%% hybrid squat %%\n").exercises[0];
+  assert.deepEqual([both.any, both.hybrid], [undefined, true]);
 });
 test("했다만(check): 방식 지정, 했다·취소, 줄 왕복, 형식 거부", () => {
   const doc = routineDoc();
