@@ -6,7 +6,7 @@ import type { WorkspaceLeaf } from "obsidian";
 import type TlogPlugin from "./main.ts";
 import {
   LOG_PATH, GAP_DAYS, localDate, localTime, weekday, daysBetween, fmtShort, monthKey, shiftMonth, monthWeeks, modeOf, measure, fmtMeasure, fmtSet, historyOf, hints, weeklyTrend, monthlyTrend,
-  todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, dayName, todayDay, setRoutine, setRun, setRunDay, setAnyDay, stalestFirst, ANY_NAME, addDay, renameDay, moveDay, removeDay, ParseError,
+  todayBlock, sessionAt, visibleExercises, lastEntryId, defaultDoc, newExercise, removeExercise, restoreExercise, renameExercise, stepOf, setStep, dayName, todayDay, setRoutine, setRun, setRunDay, setAnyDay, setCheck, setDone, stalestFirst, ANY_NAME, addDay, renameDay, moveDay, removeDay, ParseError,
 } from "./logic.ts";
 import type { Doc, Exercise, Session, SetRec, HistItem, Mode } from "./logic.ts";
 import { readDoc, updateDoc, logFile } from "./store.ts";
@@ -181,7 +181,8 @@ export class TlogView extends ItemView {
     const { lastS, histOf } = pastOf(doc, today);
     const list = visibleExercises(doc);
     const hidden = doc.exercises.filter(e => e.hidden);
-    const sets = block ? block.entries.reduce((n, e) => n + e.sets.length, 0) : 0;
+    const checkIds = new Set(doc.exercises.filter(e => e.check).map(e => e.id)); // 했다만 기록하는 종목은 세트로 세지 않는다
+    const sets = block ? block.entries.reduce((n, e) => n + (checkIds.has(e.id) ? 0 : e.sets.length), 0) : 0;
 
     const header = el.createDiv({ cls: "tlog-home-head" });
     header.createDiv({ cls: "tlog-date", text: fmtDay(today) });
@@ -227,7 +228,7 @@ export class TlogView extends ItemView {
     const row = (box: HTMLElement, ex: Exercise) => {
       const last = histOf(ex.id)[0];
       const mode = modeOf(historyOf(doc.sessions, ex.id));
-      this.renderExerciseCard(box, ex.name, last?.sets ?? [], mode,
+      this.renderExerciseCard(box, ex.name, ex.check ? [] : last?.sets ?? [], mode,
         last ? `지난번 ${fmtShort(last.date)}` : "아직 기록 없음", !this.error ? () => this.enterLog(ex.id) : null);
     };
 
@@ -238,8 +239,8 @@ export class TlogView extends ItemView {
         const exOf = doc.exercises.find(e => e.id === en.id);
         const mode = modeOf(historyOf(doc.sessions, en.id));
         const open = !!exOf && !exOf.hidden && !this.error;
-        this.renderExerciseCard(box, exOf?.name ?? en.id, en.sets, mode,
-          `오늘 ${en.sets.length}세트`, open ? () => this.enterLog(en.id) : null, true);
+        this.renderExerciseCard(box, exOf?.name ?? en.id, exOf?.check ? [] : en.sets, mode,
+          exOf?.check ? "오늘 했다 ✓" : `오늘 ${en.sets.length}세트`, open ? () => this.enterLog(en.id) : null, true);
       }
     }
     if (!list.length) el.createDiv({ cls: "tlog-note", text: "종목이 없습니다. 아래에서 추가하세요." });
@@ -402,58 +403,71 @@ export class TlogView extends ItemView {
     const head = el.createDiv({ cls: "tlog-head" });
     head.createEl("h1", { cls: "tlog-exname", text: ex.name });
     head.createSpan({ cls: "tlog-position", text: idx >= 0 ? `${idx + 1} / ${list.length}` : "" });
-    const previous = el.createDiv({ cls: "tlog-last" });
-    previous.createDiv({ cls: "tlog-item-label", text: last ? `지난번 · ${fmtShort(last.date)}` : "첫 기록" });
-    if (last) {
-      previous.createDiv({ cls: "tlog-item-sets", text: fmtSets(last.sets) });
-      previous.createDiv({ cls: "tlog-item-total", text: `${mode === "reps" ? "총 반복" : "총량"} ${fmtMeasure(measure(last.sets, mode), mode)}` });
-    } else previous.createDiv({ cls: "tlog-sub", text: "무게와 횟수를 정해 기록하세요" });
-    if (!editingPast) for (const h of hints(hist, lastDate, today, mode)) previous.createDiv({ cls: "tlog-hint", text: h });
     const step = stepOf(ex); // 이 기계의 무게 칸: 무게 −/+ 의 단위
-
-    // 무게·횟수 −/+ (숫자를 누르면 직접 입력), 그리고 기록 버튼. 세트를 수정 중이면 "n세트 수정"이 된다.
-    const controls = el.createDiv({ cls: "tlog-controls" });
-    this.renderStepper(controls, "무게", "kg", step);
-    this.renderStepper(controls, "횟수", "reps", 1);
-    const editIdx = this.editSet;
-    this.recLabel = editIdx != null ? `${editIdx + 1}세트 수정` : "기록";
-    const rec = controls.createEl("button", { cls: "tlog-main", text: `${this.recLabel}   ${kgText(this.kg)} × ${this.reps}회` });
-    rec.disabled = this.busy || this.editing !== null;
-    rec.onclick = () => void (editIdx != null ? this.updateSet(editIdx) : this.logSet());
-    this.recEl = rec;
-    if (editIdx != null) {
-      const links = el.createDiv({ cls: "tlog-links" });
-      const del = links.createEl("button", { cls: "tlog-link", text: `${editIdx + 1}세트 삭제` });
-      del.disabled = this.busy;
-      del.onclick = () => void this.deleteSet(editIdx);
-      const cancel = links.createEl("button", { cls: "tlog-link", text: "취소" });
-      cancel.onclick = () => { this.editSet = null; this.valFor = ""; this.render(); };
-    }
-
-    // 그날 찍은 세트. 세트를 누르면 값이 위로 올라오고 수정·삭제할 수 있다.
     const dayWord = editingPast ? fmtShort(date) : "오늘";
-    const recorded = el.createDiv({ cls: "tlog-recorded" });
-    const recordedHead = recorded.createDiv({ cls: "tlog-section-head" });
-    recordedHead.createEl("h2", { cls: "tlog-section-title", text: `${dayWord} 기록` });
-    recordedHead.createSpan({ cls: "tlog-section-detail", text: `${sets.length}세트` });
-    const todayRow = recorded.createDiv({ cls: "tlog-today" });
-    if (!sets.length) todayRow.createSpan({ cls: "tlog-sub", text: "아직 기록한 세트가 없습니다" });
-    sets.forEach((s, i) => {
-      const b = todayRow.createEl("button", { cls: "tlog-setbtn" });
-      b.createSpan({ cls: "tlog-set-number", text: String(i + 1), attr: { "aria-hidden": "true" } });
-      b.createSpan({ text: fmtSet(s) });
-      b.setAttribute("aria-label", `${i + 1}세트: ${fmtSet(s)}, 수정`);
-      b.setAttribute("aria-pressed", String(i === editIdx));
-      if (i === editIdx) b.addClass("is-selected");
-      b.disabled = this.busy;
-      b.onclick = () => {
-        if (this.editSet === i) { this.editSet = null; this.valFor = ""; }
-        else { this.editSet = i; this.kg = s.kg; this.reps = s.reps; this.valFor = ex.id; this.editing = null; }
-        this.render();
-      };
-    });
-    if (sets.length) recorded.createDiv({ cls: "tlog-today-vol", text: `${mode === "reps" ? "총 반복" : "총량"} ${fmtMeasure(measure(sets, mode), mode)}` });
-    if (sets.length && editIdx == null) recorded.createDiv({ cls: "tlog-note", text: "세트를 누르면 수정·삭제할 수 있습니다" });
+    if (ex.check) {
+      // 했다만 기록하는 종목: 무게·횟수 없이 큰 버튼 하나. 다시 누르면 취소.
+      const previous = el.createDiv({ cls: "tlog-last" });
+      previous.createDiv({ cls: "tlog-item-label", text: last ? `지난번 · ${fmtShort(last.date)}` : "첫 기록" });
+      const isDone = sets.length > 0;
+      const controls = el.createDiv({ cls: "tlog-controls" });
+      const chk = controls.createEl("button", { cls: isDone ? "tlog-main tlog-check is-on" : "tlog-main tlog-check", text: `${dayWord} 했다 ${isDone ? "✓" : "☐"}` });
+      chk.setAttribute("aria-pressed", String(isDone));
+      chk.disabled = this.busy;
+      chk.onclick = () => void this.toggleDone(!isDone);
+      if (isDone) controls.createDiv({ cls: "tlog-note", text: "다시 누르면 취소됩니다" });
+    } else {
+      const previous = el.createDiv({ cls: "tlog-last" });
+      previous.createDiv({ cls: "tlog-item-label", text: last ? `지난번 · ${fmtShort(last.date)}` : "첫 기록" });
+      if (last) {
+        previous.createDiv({ cls: "tlog-item-sets", text: fmtSets(last.sets) });
+        previous.createDiv({ cls: "tlog-item-total", text: `${mode === "reps" ? "총 반복" : "총량"} ${fmtMeasure(measure(last.sets, mode), mode)}` });
+      } else previous.createDiv({ cls: "tlog-sub", text: "무게와 횟수를 정해 기록하세요" });
+      if (!editingPast) for (const h of hints(hist, lastDate, today, mode)) previous.createDiv({ cls: "tlog-hint", text: h });
+
+      // 무게·횟수 −/+ (숫자를 누르면 직접 입력), 그리고 기록 버튼. 세트를 수정 중이면 "n세트 수정"이 된다.
+      const controls = el.createDiv({ cls: "tlog-controls" });
+      this.renderStepper(controls, "무게", "kg", step);
+      this.renderStepper(controls, "횟수", "reps", 1);
+      const editIdx = this.editSet;
+      this.recLabel = editIdx != null ? `${editIdx + 1}세트 수정` : "기록";
+      const rec = controls.createEl("button", { cls: "tlog-main", text: `${this.recLabel}   ${kgText(this.kg)} × ${this.reps}회` });
+      rec.disabled = this.busy || this.editing !== null;
+      rec.onclick = () => void (editIdx != null ? this.updateSet(editIdx) : this.logSet());
+      this.recEl = rec;
+      if (editIdx != null) {
+        const links = el.createDiv({ cls: "tlog-links" });
+        const del = links.createEl("button", { cls: "tlog-link", text: `${editIdx + 1}세트 삭제` });
+        del.disabled = this.busy;
+        del.onclick = () => void this.deleteSet(editIdx);
+        const cancel = links.createEl("button", { cls: "tlog-link", text: "취소" });
+        cancel.onclick = () => { this.editSet = null; this.valFor = ""; this.render(); };
+      }
+
+      // 그날 찍은 세트. 세트를 누르면 값이 위로 올라오고 수정·삭제할 수 있다.
+      const recorded = el.createDiv({ cls: "tlog-recorded" });
+      const recordedHead = recorded.createDiv({ cls: "tlog-section-head" });
+      recordedHead.createEl("h2", { cls: "tlog-section-title", text: `${dayWord} 기록` });
+      recordedHead.createSpan({ cls: "tlog-section-detail", text: `${sets.length}세트` });
+      const todayRow = recorded.createDiv({ cls: "tlog-today" });
+      if (!sets.length) todayRow.createSpan({ cls: "tlog-sub", text: "아직 기록한 세트가 없습니다" });
+      sets.forEach((s, i) => {
+        const b = todayRow.createEl("button", { cls: "tlog-setbtn" });
+        b.createSpan({ cls: "tlog-set-number", text: String(i + 1), attr: { "aria-hidden": "true" } });
+        b.createSpan({ text: fmtSet(s) });
+        b.setAttribute("aria-label", `${i + 1}세트: ${fmtSet(s)}, 수정`);
+        b.setAttribute("aria-pressed", String(i === editIdx));
+        if (i === editIdx) b.addClass("is-selected");
+        b.disabled = this.busy;
+        b.onclick = () => {
+          if (this.editSet === i) { this.editSet = null; this.valFor = ""; }
+          else { this.editSet = i; this.kg = s.kg; this.reps = s.reps; this.valFor = ex.id; this.editing = null; }
+          this.render();
+        };
+      });
+      if (sets.length) recorded.createDiv({ cls: "tlog-today-vol", text: `${mode === "reps" ? "총 반복" : "총량"} ${fmtMeasure(measure(sets, mode), mode)}` });
+      if (sets.length && editIdx == null) recorded.createDiv({ cls: "tlog-note", text: "세트를 누르면 수정·삭제할 수 있습니다" });
+    }
 
     // 이동: 목록으로, 또는 목록 순서상 다음 종목으로
     const nav = el.createDiv({ cls: "tlog-row" });
@@ -477,7 +491,7 @@ export class TlogView extends ItemView {
       };
       if (this.showHistory) {
         this.renderCalendar(menu, doc, ex, today);
-        this.renderHistory(menu, allHist);
+        this.renderHistory(menu, allHist, !!ex.check);
       }
       const pb = menu.createEl("button", { text: this.pickDate ? "날짜 고르기 닫기" : "지난 기록 고치기" });
       pb.onclick = () => { this.pickDate = !this.pickDate; this.showHistory = false; this.renaming = false; this.render(); };
@@ -516,20 +530,31 @@ export class TlogView extends ItemView {
       editBtn.onclick = () => { this.editingDays = !this.editingDays; this.render(); };
       if (this.editingDays) this.renderDayEditor(menu, doc);
       // 무게 칸: 이 기계가 몇 kg씩 올라가는지. 누르면 바로 저장되고 무게 −/+ 가 따라간다.
-      const stepRow = menu.createDiv({ cls: "tlog-today" });
-      stepRow.createSpan({ cls: "tlog-today-label", text: "무게 칸" });
-      for (const v of STEP_CHOICES) {
-        const b = stepRow.createEl("button", { cls: "tlog-setbtn", text: `${v} kg` });
-        if (v === step) b.addClass("is-selected");
+      if (!ex.check) {
+        const stepRow = menu.createDiv({ cls: "tlog-today" });
+        stepRow.createSpan({ cls: "tlog-today-label", text: "무게 칸" });
+        for (const v of STEP_CHOICES) {
+          const b = stepRow.createEl("button", { cls: "tlog-setbtn", text: `${v} kg` });
+          if (v === step) b.addClass("is-selected");
+          b.disabled = this.busy;
+          b.onclick = () => void this.setStep(ex.id, v);
+        }
+      }
+      // 기록 방식: 무게·횟수를 적을지, 했다·안 했다만 표시할지. 누르면 바로 저장된다(지난 기록은 그대로).
+      const kindRow = menu.createDiv({ cls: "tlog-today" });
+      kindRow.createSpan({ cls: "tlog-today-label", text: "기록 방식" });
+      for (const [label, on] of [["무게·횟수", false], ["했다만", true]] as [string, boolean][]) {
+        const b = kindRow.createEl("button", { cls: "tlog-setbtn", text: label });
+        if (!!ex.check === on) b.addClass("is-selected");
         b.disabled = this.busy;
-        b.onclick = () => void this.setStep(ex.id, v);
+        b.onclick = () => void this.setCheck(ex.id, on);
       }
       const syncBtn = menu.createEl("button", { text: "동기화" });
       syncBtn.onclick = () => { this.plugin.sync(); };
       const delBtn = menu.createEl("button", { cls: "tlog-danger", text: this.confirmDelete ? "정말 삭제? (다시 누르면 삭제)" : `"${ex.name}" 삭제` });
       delBtn.disabled = this.busy;
       delBtn.onclick = () => {
-        if (sets.length) { new Notice("오늘 기록이 있는 종목은 세트를 먼저 지우세요"); return; }
+        if (sets.length) { new Notice(ex.check ? "오늘 했다 표시를 먼저 취소하세요" : "오늘 기록이 있는 종목은 세트를 먼저 지우세요"); return; }
         if (!this.confirmDelete) {
           this.confirmDelete = true;
           this.render();
@@ -584,9 +609,15 @@ export class TlogView extends ItemView {
     this.bindRepeat(plus, field, step);
   }
 
-  private renderHistory(el: HTMLElement, hist: HistItem[]): void {
+  private renderHistory(el: HTMLElement, hist: HistItem[], check: boolean = false): void {
     const box = el.createDiv({ cls: "tlog-hist" });
     if (!hist.length) { box.createDiv({ cls: "tlog-note", text: "아직 기록이 없습니다" }); return; }
+    if (check) { // 했다만 기록하는 종목: 한 날짜만
+      box.createDiv({ cls: "tlog-hist-title", text: `한 날 (${hist.length}번)` });
+      for (const h of hist.slice(0, HISTORY_ROWS)) box.createDiv({ cls: "tlog-hist-row", text: `${fmtDay(h.date)}  ✓` });
+      if (hist.length > HISTORY_ROWS) box.createDiv({ cls: "tlog-note", text: `… 이전 ${hist.length - HISTORY_ROWS}번은 tlog.md에` });
+      return;
+    }
     const mode = modeOf(hist);
     const word = mode === "reps" ? "총 반복" : "총량";
     box.createDiv({ cls: "tlog-hist-title", text: `날짜별 (세트 = ${word})` });
@@ -622,6 +653,40 @@ export class TlogView extends ItemView {
       this.plugin.lastWriteAt = Date.now();
     } catch (e) {
       new Notice(e instanceof ParseError ? `${LOG_PATH} ${e.message}` : `기록 실패: ${String(e)}`);
+    }
+    this.busy = false;
+    await this.load();
+  }
+
+  /** 했다만 기록하는 종목: 오늘(또는 고치는 중인 지난 날짜)에 했다·안 했다를 표시한다. */
+  private async toggleDone(on: boolean): Promise<void> {
+    if (this.busy) return;
+    const exId = this.exId;
+    const today = localDate();
+    const date = this.editDate ?? today;
+    this.busy = true;
+    this.render();
+    try {
+      await updateDoc(this.app, (doc) => setDone(doc, exId, date, on, date === today ? localTime() : null));
+      this.plugin.lastWriteAt = Date.now();
+    } catch (e) {
+      new Notice(e instanceof ParseError ? `${LOG_PATH} ${e.message}` : `기록 실패: ${String(e)}`);
+    }
+    this.busy = false;
+    await this.load();
+  }
+
+  /** 더보기 → 기록 방식: 무게·횟수(false) 또는 했다만(true). */
+  private async setCheck(id: string, on: boolean): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    this.render();
+    try {
+      await updateDoc(this.app, (doc) => { if (!setCheck(doc, id, on)) throw new Error("그 종목이 이미 없습니다"); });
+      this.plugin.lastWriteAt = Date.now();
+      this.editSet = null;
+    } catch (e) {
+      new Notice(e instanceof ParseError ? `${LOG_PATH} ${e.message}` : `기록 방식 저장 실패: ${String(e)}`);
     }
     this.busy = false;
     await this.load();
@@ -908,7 +973,7 @@ export class TlogView extends ItemView {
     for (const en of s?.entries ?? []) {
       const exOf = doc.exercises.find(e => e.id === en.id);
       const mode = modeOf(historyOf(doc.sessions, en.id));
-      const b = panel.createEl("button", { cls: "tlog-pick", text: `${exOf?.name ?? en.id}  ${fmtSetsTotal(en.sets, mode)}` });
+      const b = panel.createEl("button", { cls: "tlog-pick", text: `${exOf?.name ?? en.id}  ${exOf?.check ? "✓" : fmtSetsTotal(en.sets, mode)}` });
       b.disabled = this.busy || !exOf || exOf.hidden; // 숨긴 종목은 기록 화면을 열 수 없다
       b.onclick = () => go(en.id);
     }
@@ -956,9 +1021,9 @@ export class TlogView extends ItemView {
     const mode = modeOf(hist);
     const past = hist.filter(h => h.date !== today);
     if (!past.length) { box.createDiv({ cls: "tlog-note", text: "이 종목의 지난 기록이 없습니다" }); return; }
-    box.createDiv({ cls: "tlog-note", text: "이 종목을 한 날짜입니다. 누르면 그 날짜의 기록 화면이 열리고, 세트를 추가·수정·삭제하면 그 날짜로 저장됩니다." });
+    box.createDiv({ cls: "tlog-note", text: ex.check ? "이 종목을 한 날짜입니다. 누르면 그 날짜의 화면이 열리고, 했다 표시를 취소할 수 있습니다." : "이 종목을 한 날짜입니다. 누르면 그 날짜의 기록 화면이 열리고, 세트를 추가·수정·삭제하면 그 날짜로 저장됩니다." });
     for (const h of past) {
-      const b = box.createEl("button", { cls: "tlog-pick", text: `${fmtDay(h.date)}  ${fmtSetsTotal(h.sets, mode)}` });
+      const b = box.createEl("button", { cls: "tlog-pick", text: `${fmtDay(h.date)}  ${ex.check ? "✓" : fmtSetsTotal(h.sets, mode)}` });
       b.disabled = this.busy;
       b.onclick = () => { this.editDate = h.date; this.valFor = ""; this.resetPanels(); this.render(); };
     }

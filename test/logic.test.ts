@@ -4,7 +4,7 @@ import {
   localDate, localTime, daysBetween, shiftDate, weekStart, weekday, shiftMonth, monthWeeks, volume, fmtVol, modeOf, measure, fmtMeasure, fmtSet, totalReps, bestSet, historyOf, weeklyTrend, monthlyTrend, hints,
   todayBlock, sessionAt, visibleExercises, lastEntryId, toLogText, parseLogText, defaultDoc, newExercise, slugId, removeExercise, restoreExercise,
   renameExercise, setStep, stepOf, DEFAULT_STEP, ParseError,
-  DEFAULT_DAYS, LEGACY_DAYS, ANY_NAME, setAnyDay, lastDone, stalestFirst, dayName, nextDay, nextAfter, setRoutine, setRunDay, sessionDay, todayDay, setRun, addDay, renameDay, moveDay, removeDay,
+  DEFAULT_DAYS, LEGACY_DAYS, ANY_NAME, setAnyDay, setCheck, setDone, DONE_SET, lastDone, stalestFirst, dayName, nextDay, nextAfter, setRoutine, setRunDay, sessionDay, todayDay, setRun, addDay, renameDay, moveDay, removeDay,
 } from "../src/logic.ts";
 import type { SetRec, Doc, HistItem, Session } from "../src/logic.ts";
 
@@ -156,6 +156,39 @@ test("기타·종합(anyday): 루틴 날과 함께 쓰지 않음, 순환에 끼�
   rejects(HEAD + "%% anyday squat x %%\n", 3, /anyday 줄 형식/);
   rejects(HEAD + "2026-09-07 session\n%% anyday squat %%\n", 4, /기록보다 앞/);
   assert.equal(parseLogText(HEAD + "%% routine squat d1 %%\n%% anyday squat %%\n").exercises[0].routine, undefined);
+});
+test("했다만(check): 방식 지정, 했다·취소, 줄 왕복, 형식 거부", () => {
+  const doc = routineDoc();
+  assert.equal(setCheck(doc, "nope", true), false);
+  assert.equal(setCheck(doc, "deadlift", true), true);
+  doc.sessions = [{ date: "2026-11-08", time: "10:00", entries: [{ id: "bench", sets: S("60x8") }] }];
+  // 했다: 없는 날은 세션을 날짜 순서로 만들고 0x1 한 세트. 두 번 눌러도 한 세트.
+  setDone(doc, "deadlift", "2026-11-07", true, null);
+  setDone(doc, "deadlift", "2026-11-07", true, null);
+  setDone(doc, "deadlift", "2026-11-08", true, "12:00");
+  assert.deepEqual(doc.sessions.map(s => [s.date, s.time, s.entries.map(e => e.id).join(",")]), [["2026-11-07", null, "deadlift"], ["2026-11-08", "10:00", "bench,deadlift"]]);
+  assert.deepEqual(doc.sessions[0].entries[0].sets, [DONE_SET]);
+  const text = toLogText(doc);
+  assert.ok(text.includes("\n%% ex deadlift 데드리프트 %%\n%% check deadlift %%\n") && text.includes("\n2026-11-07 session\n2026-11-07 deadlift 0x1\n"));
+  assert.deepEqual(parseLogText(text), doc);
+  // 취소: 그 종목만 빠지고, 비면 세션도 지운다. 러닝이 있으면 세션은 남는다.
+  setDone(doc, "deadlift", "2026-11-08", false, null);
+  assert.deepEqual(doc.sessions[1].entries.map(e => e.id), ["bench"]);
+  doc.sessions[0].run = true;
+  setDone(doc, "deadlift", "2026-11-07", false, null);
+  assert.deepEqual([doc.sessions[0].date, doc.sessions[0].entries.length], ["2026-11-07", 0]);
+  delete doc.sessions[0].run;
+  setDone(doc, "deadlift", "2026-11-07", true, null);
+  setDone(doc, "deadlift", "2026-11-07", false, null);
+  setDone(doc, "deadlift", "2026-11-01", false, null); // 없는 날 취소는 아무 일도 없음
+  assert.deepEqual(doc.sessions.map(s => s.date), ["2026-11-08"]);
+  // 방식을 되돌려도 기록 줄은 그대로
+  setDone(doc, "deadlift", "2026-11-08", true, null);
+  assert.equal(setCheck(doc, "deadlift", false), true);
+  assert.ok(!toLogText(doc).includes("check") && toLogText(doc).includes("2026-11-08 deadlift 0x1"));
+  rejects(HEAD + "%% check bench %%\n", 3, /check 줄 형식/);
+  rejects(HEAD + "%% check squat x %%\n", 3, /check 줄 형식/);
+  rejects(HEAD + "2026-09-07 session\n%% check squat %%\n", 4, /기록보다 앞/);
 });
 test("기본 분할: 가슴·등 → 하체 → 어깨·팔, 다음 날·이름, 없는 날은 지정 안 됨", () => {
   const doc = defaultDoc("x");

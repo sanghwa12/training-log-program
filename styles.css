@@ -95,6 +95,8 @@
     background: var(--interactive-accent-hover);
   }
 }
+/* 했다만 기록하는 종목: 아직 안 했으면 빈 버튼, 했으면 채운 버튼. */
+.tlog-view button.tlog-main.tlog-check:not(.is-on) { background: var(--tlog-surface); color: var(--text-normal); border-color: var(--tlog-border); }
 .tlog-view .tlog-recorded { padding: 16px; border: 1px solid var(--tlog-border); border-radius: 14px; background: var(--tlog-surface); margin-bottom: 18px; }
 .tlog-view .tlog-today { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 16px; }
 .tlog-view .tlog-recorded .tlog-today { margin-top: 12px; }
