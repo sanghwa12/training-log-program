@@ -1,83 +1,152 @@
-/* 운동 일지 — 모든 규칙은 .tlog-view 아래로만. */
-.tlog-view { padding: 8px 12px 24px; overflow-y: auto; }
+/* 운동 일지 — 테마 색상을 따르고 모든 규칙은 .tlog-view 안으로 제한한다. */
+.tlog-view {
+  --tlog-surface: var(--background-primary);
+  --tlog-border: var(--background-modifier-border);
+  padding: 24px 16px max(28px, env(safe-area-inset-bottom));
+  overflow-y: auto;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 16px;
+  line-height: 1.5;
+  container-type: inline-size;
+}
+.tlog-view .tlog-content { width: 100%; max-width: 600px; margin: 0 auto; }
+.tlog-view *, .tlog-view *::before, .tlog-view *::after { box-sizing: border-box; }
 .tlog-view button {
-  min-height: 44px; font-size: 17px; border-radius: 10px;
+  height: auto; min-height: 44px; max-width: 100%; padding: 10px 14px;
+  border: 1px solid var(--tlog-border); border-radius: 12px;
+  background: var(--tlog-surface); color: var(--text-normal); box-shadow: none;
+  font-family: inherit; font-size: 16px; line-height: 1.4; white-space: normal; overflow-wrap: anywhere;
   touch-action: manipulation; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
   -webkit-tap-highlight-color: transparent;
 }
-.tlog-view button:disabled { opacity: 0.4; }
+.tlog-view button:disabled { opacity: 0.45; }
+.tlog-view button:focus-visible, .tlog-view input:focus-visible {
+  outline: 2px solid var(--text-accent); outline-offset: 3px;
+}
+@media (hover: hover) {
+  .tlog-view button:not(:disabled):hover { background: var(--background-modifier-hover); }
+}
+.tlog-view button:not(:disabled):active { filter: brightness(0.94); }
 
-/* 띠·안내 */
-.tlog-banner { padding: 10px 12px; border-radius: 8px; margin: 6px 0; font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.tlog-banner.is-error { background: var(--background-modifier-error); color: var(--text-on-accent); }
-.tlog-banner.is-warn { background: var(--background-modifier-border); }
-.tlog-note { font-size: 13px; color: var(--text-muted); margin: 6px 0; }
-.tlog-date { font-size: 14px; color: var(--text-muted); margin: 6px 0 2px; }
-.tlog-title { font-size: 18px; font-weight: 600; margin: 8px 0; }
-.tlog-sub { font-size: 14px; color: var(--text-muted); margin: 2px 0; }
-.tlog-hint { font-size: 14px; color: var(--text-accent); margin: 2px 0; }
-.tlog-footer { font-size: 12px; color: var(--text-faint); text-align: center; margin-top: 18px; }
+/* 제목과 보조 정보 */
+.tlog-view .tlog-date { font-size: 14px; color: var(--text-muted); margin: 0 0 6px; }
+.tlog-view .tlog-title { font-size: 30px; font-weight: 750; letter-spacing: -0.04em; line-height: 1.25; margin: 0 0 14px; }
+.tlog-view .tlog-sub, .tlog-view .tlog-note { font-size: 14px; color: var(--text-muted); overflow-wrap: anywhere; }
+.tlog-view .tlog-sub { margin: 3px 0; }
+.tlog-view .tlog-note { margin: 8px 0; }
+.tlog-view .tlog-hint { font-size: 14px; color: var(--text-accent); margin: 8px 0 0; }
+.tlog-view .tlog-footer { font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 24px; }
+.tlog-view .tlog-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 12px 14px; border: 1px solid var(--tlog-border); border-radius: 12px; margin: 0 0 16px; font-size: 14px;
+}
+.tlog-view .tlog-banner.is-error { background: var(--background-primary); border-color: var(--text-error); color: var(--text-error); }
+.tlog-view .tlog-banner.is-warn { background: var(--background-modifier-hover); border-inline-start: 3px solid var(--text-accent); }
 
-/* 홈 */
-.tlog-list { margin: 8px 0 16px; }
-.tlog-item { padding: 8px 0; border-bottom: 1px solid var(--background-modifier-border); }
-.tlog-item-main { font-size: 17px; }
-.tlog-links { display: flex; justify-content: center; gap: 18px; }
+/* 홈: 오늘 요약 → 루틴 → 종목 카드 */
+.tlog-view .tlog-home-head { margin-bottom: 22px; }
+.tlog-view .tlog-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.tlog-view .tlog-summary span {
+  padding: 5px 10px; border: 1px solid var(--tlog-border); border-radius: 8px;
+  background: var(--tlog-surface); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.tlog-view .tlog-list { display: grid; gap: 10px; margin: 24px 0; }
+.tlog-view .tlog-section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+.tlog-view .tlog-section-title { font-size: 17px; font-weight: 700; margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
+.tlog-view .tlog-section-detail { font-size: 13px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.tlog-view .tlog-item {
+  display: flex; flex-direction: column; width: 100%; padding: 15px 16px; text-align: left;
+  border: 1px solid var(--tlog-border); border-radius: 14px; background: var(--tlog-surface);
+}
+.tlog-view button.tlog-item { cursor: pointer; }
+.tlog-view .tlog-item.is-done { border-inline-start: 3px solid var(--text-accent); }
+.tlog-view .tlog-item-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; margin-bottom: 8px; }
+.tlog-view .tlog-item-main { font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+.tlog-view .tlog-item-arrow { color: var(--text-muted); font-size: 24px; line-height: 1; flex-shrink: 0; }
+.tlog-view .tlog-item-label { display: block; font-size: 13px; color: var(--text-muted); }
+.tlog-view .tlog-item-sets { display: block; margin-top: 4px; font-size: 16px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.tlog-view .tlog-item-total { display: block; margin-top: 6px; font-size: 14px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.tlog-view .tlog-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 8px; margin: 14px 0; }
+.tlog-view .tlog-routines { margin: 0 0 12px; gap: 8px; }
+.tlog-view .tlog-routines > .tlog-today-label { flex-basis: 100%; font-size: 13px; color: var(--text-muted); margin-bottom: 2px; }
 
-/* 기록 화면 */
-.tlog-head { display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px; }
-.tlog-exname { font-size: 26px; font-weight: 700; }
-.tlog-last { font-size: 17px; margin: 6px 0 2px; }
+/* 기록: 지난 기록과 입력부, 오늘 세트를 분리한다. */
+.tlog-view .tlog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 18px; }
+.tlog-view .tlog-exname { font-size: 28px; font-weight: 750; letter-spacing: -0.04em; line-height: 1.3; margin: 0; overflow-wrap: anywhere; }
+.tlog-view .tlog-position { flex-shrink: 0; font-size: 13px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.tlog-view .tlog-last { padding: 14px 16px; margin-bottom: 20px; border: 1px solid var(--tlog-border); border-radius: 14px; background: var(--tlog-surface); }
+.tlog-view .tlog-last .tlog-hint { padding-top: 8px; border-top: 1px solid var(--tlog-border); }
+.tlog-view .tlog-controls { margin-bottom: 22px; }
+.tlog-view .tlog-stepper { display: grid; grid-template-columns: 56px minmax(0, 1fr) 56px; align-items: center; gap: 8px 10px; margin: 14px 0; }
+.tlog-view .tlog-stepper-label { grid-column: 1 / -1; font-size: 14px; font-weight: 600; }
+.tlog-view button.tlog-step { min-height: 56px; padding: 0; font-size: 28px; touch-action: none; }
+.tlog-view button.tlog-value, .tlog-view input.tlog-valinput {
+  width: 100%; min-width: 0; min-height: 56px; padding: 6px 8px; border: 1px solid var(--tlog-border); border-radius: 12px;
+  background: var(--tlog-surface); color: var(--text-normal); box-shadow: none;
+  font-size: 28px; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums;
+}
+.tlog-view button.tlog-main {
+  width: 100%; min-height: 60px; margin-top: 6px; padding: 14px 12px;
+  border-color: transparent; background: var(--interactive-accent); color: var(--text-on-accent); font-size: 20px; font-weight: 700;
+}
+@media (hover: hover) {
+  .tlog-view button.tlog-main:not(:disabled):hover, .tlog-view button.tlog-run.is-on:not(:disabled):hover {
+    background: var(--interactive-accent-hover);
+  }
+}
+.tlog-view .tlog-recorded { padding: 16px; border: 1px solid var(--tlog-border); border-radius: 14px; background: var(--tlog-surface); margin-bottom: 18px; }
+.tlog-view .tlog-today { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 16px; }
+.tlog-view .tlog-recorded .tlog-today { margin-top: 12px; }
+.tlog-view .tlog-today-label { margin-right: 4px; font-size: 14px; }
+.tlog-view .tlog-today-vol { font-size: 16px; font-weight: 650; padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--tlog-border); font-variant-numeric: tabular-nums; }
+.tlog-view button.tlog-setbtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 12px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.tlog-view button.tlog-setbtn.is-selected { border-color: var(--text-accent); color: var(--text-accent); background: var(--background-modifier-hover); box-shadow: inset 0 0 0 1px var(--text-accent); font-weight: 650; }
+.tlog-view .tlog-set-number { color: var(--text-muted); font-size: 12px; padding-right: 8px; border-right: 1px solid var(--tlog-border); }
+.tlog-view .tlog-row { display: flex; gap: 8px; margin: 12px 0; }
+.tlog-view .tlog-row > button { flex: 1; min-width: 0; }
+.tlog-view .tlog-row > button.tlog-next { flex: 2; font-weight: 600; }
 
-.tlog-stepper { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
-.tlog-stepper-label { width: 40px; font-size: 15px; color: var(--text-muted); }
-.tlog-step { width: 60px; min-height: 52px; font-size: 26px; touch-action: none; }
-.tlog-view button.tlog-value { flex: 1; min-height: 52px; font-size: 26px; font-weight: 700;
-  background: transparent; border: 1px dashed var(--background-modifier-border); box-shadow: none; }
-.tlog-view input.tlog-valinput { flex: 1; min-height: 52px; font-size: 24px; font-weight: 700; text-align: center; border-radius: 10px; }
+/* 보조 동작과 더보기 */
+.tlog-view button.tlog-link { background: transparent; border-color: transparent; box-shadow: none; color: var(--text-muted); min-height: 44px; font-size: 14px; padding: 8px; }
+.tlog-view button.tlog-disclosure { display: block; width: 100%; text-align: left; border-color: var(--tlog-border); padding: 12px 14px; }
+.tlog-view .tlog-menu { display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--tlog-border); border-radius: 14px; padding: 14px; margin: 8px 0; background: var(--tlog-surface); }
+.tlog-view button.tlog-danger { color: var(--text-error); background: transparent; border-color: var(--text-error); }
+.tlog-view .tlog-add { display: flex; flex-direction: column; gap: 8px; }
+.tlog-view button.tlog-pick { text-align: left; font-size: 15px; }
+.tlog-view .tlog-newex { display: flex; gap: 8px; }
+.tlog-view input.tlog-nameinput { flex: 1; width: 100%; min-width: 0; height: auto; min-height: 44px; padding: 8px 10px; border-radius: 10px; font-size: 16px; }
+.tlog-view .tlog-hist { font-size: 14px; }
+.tlog-view .tlog-hist-title { font-weight: 650; margin: 16px 0 8px; }
+.tlog-view .tlog-hist-row { font-variant-numeric: tabular-nums; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 0; border-bottom: 1px solid var(--tlog-border); }
 
-.tlog-main { width: 100%; min-height: 60px; font-size: 20px; font-weight: 700; margin: 12px 0 6px;
-  background: var(--interactive-accent); color: var(--text-on-accent); }
-.tlog-today { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 16px; margin: 4px 0 2px; }
-.tlog-today-label { margin-right: 4px; }
-.tlog-today-vol { color: var(--text-muted); margin-left: 2px; }
-.tlog-view button.tlog-setbtn { min-height: 38px; font-size: 16px; padding: 0 10px; }
-.tlog-view button.tlog-setbtn.is-selected { outline: 3px solid var(--text-accent); }
-.tlog-item.is-link { cursor: pointer; }
-
-.tlog-row { display: flex; gap: 8px; margin: 8px 0; }
-.tlog-row > button { flex: 1; }
-.tlog-row > button.tlog-next { flex: 2; font-weight: 600; }
-
-/* 글자처럼 보이는 보조 버튼 */
-.tlog-view button.tlog-link { background: transparent; border: none; box-shadow: none; color: var(--text-muted);
-  text-decoration: underline; min-height: 40px; font-size: 15px; padding: 0 6px; }
-
-/* 더보기 */
-.tlog-menu { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--background-modifier-border); border-radius: 10px; padding: 10px; margin: 6px 0; }
-.tlog-view button.tlog-danger { color: var(--text-error); background: transparent; border: 1px solid var(--background-modifier-error); box-shadow: none; }
-.tlog-add { display: flex; flex-direction: column; gap: 6px; }
-.tlog-pick { text-align: left; font-size: 15px; }
-.tlog-newex { display: flex; gap: 8px; }
-.tlog-view input.tlog-nameinput { flex: 1; min-width: 0; font-size: 17px; min-height: 44px; padding: 0 10px; border-radius: 8px; }
-.tlog-hist { font-size: 14px; }
-.tlog-hist-title { font-weight: 600; margin: 6px 0 2px; color: var(--text-muted); }
-.tlog-hist-row { font-variant-numeric: tabular-nums; white-space: pre-wrap; padding: 2px 0; }
-
-/* 기록 보기 달력 */
-.tlog-cal { margin: 6px 0; }
-.tlog-cal-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
-.tlog-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
-.tlog-cal-wd { font-size: 12px; color: var(--text-muted); padding: 2px 0; }
-.tlog-view button.tlog-cal-day { min-height: 36px; padding: 0; font-size: 15px; background: transparent; box-shadow: none; border: 1px solid transparent; position: relative; }
-.tlog-view button.tlog-cal-day.is-other { color: var(--text-faint); }
-.tlog-view button.tlog-cal-day.has-session::after { content: ""; position: absolute; left: 50%; bottom: 3px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--text-muted); }
+/* 달력과 러닝 */
+.tlog-view .tlog-cal { margin: 16px 0; }
+.tlog-view .tlog-cal-head { display: flex; justify-content: space-between; align-items: center; font-weight: 650; margin-bottom: 10px; }
+.tlog-view .tlog-cal-head > button { min-width: 44px; font-size: 22px; }
+.tlog-view .tlog-cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; text-align: center; }
+.tlog-view .tlog-cal-wd { font-size: 12px; color: var(--text-muted); padding: 6px 0; }
+.tlog-view button.tlog-cal-day { min-height: 44px; padding: 0; font-size: 15px; background: transparent; border-color: transparent; border-radius: 8px; position: relative; }
+.tlog-view button.tlog-cal-day.is-other { color: var(--text-muted); }
+.tlog-view button.tlog-cal-day.has-session::after { content: ""; position: absolute; left: 50%; bottom: 4px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--text-muted); }
 .tlog-view button.tlog-cal-day.has-ex { font-weight: 700; color: var(--text-accent); }
 .tlog-view button.tlog-cal-day.has-ex::after { background: var(--text-accent); }
-.tlog-view button.tlog-cal-day.is-today { border-color: var(--background-modifier-border); }
-.tlog-view button.tlog-cal-day.is-selected { outline: 2px solid var(--text-accent); }
-
-/* 러닝 체크 */
-.tlog-view button.tlog-run { width: 100%; margin: 6px 0; font-size: 16px; }
-.tlog-view button.tlog-run.is-on { background: var(--interactive-accent); color: var(--text-on-accent); }
+.tlog-view button.tlog-cal-day.is-today { border-color: var(--tlog-border); font-weight: 700; }
+.tlog-view button.tlog-cal-day.is-selected { box-shadow: inset 0 0 0 2px var(--text-accent); color: var(--text-accent); }
+.tlog-view button.tlog-run { width: 100%; margin: 4px 0; font-size: 15px; text-align: left; }
+.tlog-view button.tlog-run.is-on { background: var(--interactive-accent); color: var(--text-on-accent); border-color: transparent; }
 .tlog-view button.tlog-cal-day.has-run { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+
+/* Obsidian의 좁은 패널과 휴대폰에서도 긴 이름·설정 버튼을 줄바꿈한다. */
+@container (max-width: 340px) {
+  .tlog-view .tlog-title { font-size: 27px; }
+  .tlog-view .tlog-exname { font-size: 25px; }
+  .tlog-view .tlog-item, .tlog-view .tlog-last, .tlog-view .tlog-recorded { padding: 12px; }
+  .tlog-view .tlog-stepper { grid-template-columns: 48px minmax(0, 1fr) 48px; gap: 6px 8px; }
+  .tlog-view button.tlog-main { font-size: 18px; }
+  .tlog-view .tlog-links { gap: 2px; }
+  .tlog-view .tlog-menu { padding: 10px; }
+  .tlog-view .tlog-newex { flex-wrap: wrap; }
+  .tlog-view .tlog-newex > input { flex-basis: 100%; }
+  .tlog-view .tlog-cal-grid { gap: 2px; }
+}
